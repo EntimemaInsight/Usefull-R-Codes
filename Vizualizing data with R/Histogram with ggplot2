@@ -1,5 +1,5 @@
 
-hist <- ggplot(data = data, aes(x = Age))
+hist <- ggplot(data, aes(x = Age))
 hist + geom_histogram(bins = 15, color = "darkslategray",
                       fill = "darkslategray4", alpha = 0.5) + # Добри практики за цветове
   ggtitle("Age Distribution on the Titanic") + # Заглавие
