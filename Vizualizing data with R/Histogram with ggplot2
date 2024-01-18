@@ -10,12 +10,12 @@ hist
 
 II. Вариант - 2 числови променливи 
 
-hist <- ggplot(data, aes(x = Age, fill = Survived)) + # в случая поставяме две числови променливи на оста x 
+hist <- ggplot(data, aes(x = Age, fill = Survived)) +
 geom_histogram(binwidth = 5, color = "white") +  
 labs(y = "Number of Passangers", # Заглавие ордината
        x = "Age", # Заглавие 
-       title = "Age Distribution on the Titanic") + # # Заглавиабсцисае диаграма
-theme_light() # Добри практики за дизайн
+       title = "Age Distribution on the Titanic") + 
+theme_light() # 
 hist
 
 
