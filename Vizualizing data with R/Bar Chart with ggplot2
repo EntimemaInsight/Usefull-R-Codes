@@ -1,14 +1,11 @@
 
-bar <- ggplot(data, aes(x = Sex, fill = Survived)) + # Ако x = fill, fill указва различните стойности да имат различни цветове 
-                                                        # Ако x <> fill, fill указва различна категориална променлива по оста x
-
+bar <- ggplot(data, aes(x = title, fill = gender)) + 
 geom_bar() + 
 theme_light() +
-labs(y = "Passenger Count",                 # това са titles на осевите линии и на цялата диаграма 
-     x = "Gender",
-     title = "Survival Rate by Gender") +
-facet_wrap( ~ Pclass )
-
+labs(y = "Employee count",                 
+     x = "Job positions",
+     title = "Job positions by gender") 
+#facet_wrap( ~ Pclass )
 
 bar
 
