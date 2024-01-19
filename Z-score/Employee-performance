@@ -1,0 +1,33 @@
+# Sample data
+mean_performance <- 5 # average performance (projects/months)
+sd_performance <- 1   # standard deviation
+employee_performance <- 7 # new employee performance
+
+# Z-score calculation
+z_score <- (employee_performance - mean_performance) / sd_performance
+
+# Cumulative probability
+cumulative_probability <- pnorm(z_score)
+
+# Results
+print(paste("Z-score:", z_score))
+print(paste("Cumulative_probability (until Z):", cumulative_probability))
+print(paste("The probability of an employee having higher productivity.:", 1 - cumulative_probability))
+
+# Standard Normal Distribution Plot
+x <- seq(-4, 4, length=100)
+y <- dnorm(x)
+
+plot(x, y, type="l", main="Standard Normal Distribution", xlab="Z-score", ylab="Density")
+
+# Mapping Employee Z-score segment
+z_score_seq <- seq(-4, z_score, length=100)
+z_score_y <- dnorm(z_score_seq)
+polygon(c(z_score_seq, rev(z_score_seq)), c(rep(0, length(z_score_seq)), rev(z_score_y)), col="skyblue")
+
+# Employee Z-score fixing
+abline(v=z_score, col="red", lwd=2)
+
+
+
+
