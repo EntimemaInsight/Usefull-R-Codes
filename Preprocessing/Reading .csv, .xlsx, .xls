@@ -1,1 +1,43 @@
 library(tidyverse) 
+library(readxl)
+
+# importing files eg: data.csv ,images.zip,config.txt 
+
+input <- "C:/Users/aleksandar.dimitrov/Desktop/INFOLITICA/IFRS 9 ПОДГОТОВКА"
+
+list.files(input)
+
+Output: 
+list.files(input)
+[1] "billboard.csv"           "employee-data.csv"       "hdi-cpi.csv"             "loan_data_2007_2014.csv" "plot_zoom_png"          
+[6] "Python Codes"            "R codes"                 "tb.csv"                  "titanic.csv"           
+
+# importing and reading .csv files
+
+library(tidyverse)
+
+input <- "C:/Users/aleksandar.dimitrov/Desktop/INFOLITICA/IFRS 9 ПОДГОТОВКА/employee-data.csv"
+
+data <- read.csv(input) %>% 
+  as.tibble()
+
+data
+
+# importing and reading .xls/.xlsx files
+
+library(readxl)
+
+
+input <- "C:/Users/aleksandar.dimitrov/Desktop/INFOLITICA/Usage_10.12.2023.xlsx"
+
+data <- read_excel(input) %>% 
+  as.tibble()
+
+data
+
+
+
+
+
+
+
