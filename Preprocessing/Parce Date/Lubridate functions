@@ -1,0 +1,20 @@
+# lubridate loading (lubridate is a part from tidyverse)
+library(tidyverse)
+
+# Sample strings
+date_string1 <- "2024-01-21" # Y-M D
+date_string2 <- "21/01/2024" # D/M/Y
+date_string3 <- "01-21-2024" # D-M-Y
+date_string4 <- "Jan-2023" # M-Y
+
+
+# Date parcing
+date1 <- ymd(date_string1)
+date2 <- dmy(date_string2)
+date3 <- mdy(date_string3)
+data4 <- my((date_string4)
+
+# Results
+date1
+date2
+date3
