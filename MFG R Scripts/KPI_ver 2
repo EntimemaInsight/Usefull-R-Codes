@@ -1,20 +1,18 @@
 # Load libraries
-library(dplyr)
+library(tidyverse)
 library(odbc)
 library(DBI)
-#library(readr)
 library(data.table)
 library(readxl)
 library(writexl)
-library(dplyr)
-library(tidyr)
 library(rlang)
-library(tidyverse)
 library(norm)
 library(reshape2)
 library(openxlsx)
 library(lubridate)
 library(taskscheduleR)
+
+
 CurrentDate <- paste0(format(Sys.time(),"%d.%m.%Y_%H.%M"),'.rds')
 options(scipen = 999)
 
