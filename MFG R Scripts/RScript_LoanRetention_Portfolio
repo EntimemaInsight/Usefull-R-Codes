@@ -1,0 +1,824 @@
+# Load libraries
+library(dplyr)
+library(odbc)
+library(DBI)
+#library(readr)
+library(data.table)
+library(readxl)
+library(writexl)
+library(plyr)
+library(purrr)
+library(dplyr)
+library(tidyr)
+library(rlang)
+library(tidyverse)
+library(norm)
+library(reshape2)
+library(openxlsx)
+library(lubridate)
+library(taskscheduleR)
+
+options(scipen = 999)
+
+Old_Camaigne_FileDate <- '19.01.2023'
+DateForFile <- format(Sys.Date(), "%d.%m.%Y")
+
+#Read and prepare files from last campaign --READT
+{
+  
+  A1_FastLoan_OldCampaign = read_excel(paste0("//cow.easycredit.bg/FileServer/White Card/Reports BG/CC-BAR/CC- BAR Campaign/Кампании закрити кредити/База на всички закрити последно проверени/А1 кредит ",Old_Camaigne_FileDate,".xlsx")
+                                      , sheet = "Sheet1") %>%
+    select(CID, Call_OLD = Call_NEW)
+  
+  A1_ConsumerLoan_OldCampaign = read_excel(paste0("//cow.easycredit.bg/FileServer/White Card/Reports BG/CC-BAR/CC- BAR Campaign/Кампании закрити кредити/База на всички закрити последно проверени/А1 потребителски ",Old_Camaigne_FileDate,".xlsx")
+                                      , sheet = "Sheet1") %>%
+    select(CID, Call_OLD = Call_NEW)
+  
+  
+  AxiLoan_OldCampaign = read_excel(paste0("//cow.easycredit.bg/FileServer/White Card/Reports BG/CC-BAR/CC- BAR Campaign/Кампании закрити кредити/База на всички закрити последно проверени/AXi credit 4 ",Old_Camaigne_FileDate,".xlsx")
+                                   , sheet = "Sheet1") %>%
+    select(CID, Call_OLD = Call_NEW)
+  
+}
+
+#ReadAndPrepare All bases from CC --READT
+{
+  
+  A1_FastLoan_AllBase_Processed_CID = read_excel("//cow.easycredit.bg/FileServer/White Card/Reports BG/CC-BAR/CC- BAR Campaign/Кампании закрити кредити/All Base processed/All base A1 credit call campleted.xlsx") %>%
+    select(CID = `Стар КИД Кредит`,`Last call`, Result = `Резултат`) %>%
+    distinct(CID, .keep_all = T)
+  
+  A1_FastLoan_AllBase_Processed_EGN = read_excel("//cow.easycredit.bg/FileServer/White Card/Reports BG/CC-BAR/CC- BAR Campaign/Кампании закрити кредити/All Base processed/All base A1 credit call campleted.xlsx") %>%
+    select(EGN = `ЕГН`, `Last call`, Result = `Резултат`) %>%
+    distinct(EGN, .keep_all = T)
+  
+  A1_ConsumerLoan_AllBase_Processed_CID = read_excel("//cow.easycredit.bg/FileServer/White Card/Reports BG/CC-BAR/CC- BAR Campaign/Кампании закрити кредити/All Base processed/All base A1 ПОТРЕБИТЕЛСКИ.xlsx") %>%
+    select(CID = `Стар КИД Кредит`, `Last call`, Result = `Резултат`)%>%
+    distinct(CID, .keep_all = T)
+  
+  A1_ConsumerLoan_AllBase_Processed_EGN = read_excel("//cow.easycredit.bg/FileServer/White Card/Reports BG/CC-BAR/CC- BAR Campaign/Кампании закрити кредити/All Base processed/All base A1 ПОТРЕБИТЕЛСКИ.xlsx") %>%
+    select(EGN = `ЕГН`, `Last call`, Result = `Резултат`) %>%
+    distinct(EGN, .keep_all = T)
+  
+ Axi_Loan_AllBase_Processed_CID = read_excel("//cow.easycredit.bg/FileServer/White Card/Reports BG/CC-BAR/CC- BAR Campaign/Кампании закрити кредити/All Base processed/ALL Base call  AXI Credit 4 Completed.xlsx") %>%
+    select(CID = `Стар КИД Кредит`,  `Last call`, Result = `Резултат`)%>%
+   distinct(CID, .keep_all = T)
+ 
+ Axi_Loan_AllBase_Processed_EGN = read_excel("//cow.easycredit.bg/FileServer/White Card/Reports BG/CC-BAR/CC- BAR Campaign/Кампании закрити кредити/All Base processed/ALL Base call  AXI Credit 4 Completed.xlsx") %>%
+   select(EGN = `ЕГН`, `Last call`, Result = `Резултат`)%>%
+   distinct(EGN, .keep_all = T)
+  
+}
+
+#Closed Credit_SQL --READY
+{
+myc <- DBI::dbConnect(odbc::odbc()
+                      , driver = "SQL Server"
+                      , server = "scorpio.smartitbg.int"
+                      , database = "BIsmartWCBG"
+)
+
+Closed_Loans_All <- paste0("
+SELECT ContractNumber AS CID
+,CONVERT(Date,DateClosed) As DateClosed
+, CreditCardLimit
+, os.Name AS Status
+, p.Name AS Product
+FROM dwh.DimOffers o
+	JOIN dwh.DimOffersStatus os ON os.OffStatusSK = o.OffStatusSK
+	JOIN dwh.DimProduct p ON p.ProductSK = o.ProductSK
+Where CONVERT(Date,DateClosed) IS NOT NULL
+	AND ProductTypeSK = 517
+	AND o.OffStatusSK = 7
+	AND p.Name in ('A1 Credit 1', 'A1 Credit 2', 'А1 потребителски Без ГД', 'А1 потребителски ГД', 'А1 потребителски ГД 2', 'Axi Credit 4', 'Axi Credit 4 - paper', 'Кредит от БК 4 ', 'Кредит от БК 4 - paper')
+ -- AND CONVERT(Date,DateClosed) < '2023-01-09' --TEST
+")
+
+start_time <- Sys.time()
+Closed_Loans_All <- DBI::dbFetch(DBI::dbSendQuery(myc, Closed_Loans_All))
+print(paste("Done in", round(difftime(Sys.time(), start_time,unit = "mins"),2), "minutes"))
+
+#Close the database connection
+DBI::dbDisconnect(myc)
+}
+
+#DaysDelay_SQL -- READY
+{
+  #LAST INSTALMENT DD
+  
+  myc <- DBI::dbConnect(odbc::odbc()
+                        , driver = "SQL Server"
+                        , server = "scorpio.smartitbg.int"
+                        , database = "BIsmartWCBG"
+  )
+  
+  DD_LastInstalment <- paste0("
+  SELECT ContractNumber AS CID
+  , DaysDelay_lastInstalment
+FROM (
+select ContractNumber
+, MAX(InstalmentNumber) AS LastInstalment
+, DayDelays AS DaysDelay_lastInstalment
+, ROW_NUMBER() OVER(PARTITION BY ContractNumber  
+                                ORDER BY InstalmentNumber DESC) AS tr
+from dwh.DimCreditRepaymentPlan cpp
+join dwh.FactCreditPayment cp on cp.CreditSCSK = cpp.CreditSCSK
+join dwh.DimCreditSC csc ON csc.CreditSCSK = cpp.CreditSCSK
+join dwh.DimOffers o ON o.OfferSK = csc.OfferSK 
+join dwh.DimProduct p ON p.ProductSK = o.ProductSK
+group by ContractNumber, DayDelays, InstalmentNumber) AS Result
+where tr = 1
+AND DaysDelay_lastInstalment IS NOT NULL
+
+
+")
+  
+  start_time <- Sys.time()
+  DD_LastInstalment <- DBI::dbFetch(DBI::dbSendQuery(myc, DD_LastInstalment))
+  print(paste("Done in", round(difftime(Sys.time(), start_time,unit = "mins"),2), "minutes"))
+  
+  #Close the database connection
+  DBI::dbDisconnect(myc)
+  
+#MAX DD
+  
+  myc <- DBI::dbConnect(odbc::odbc()
+                        , driver = "SQL Server"
+                        , server = "scorpio.smartitbg.int"
+                        , database = "BIsmartWCBG"
+  )
+  
+  Max_DD <- paste0("SELECT ContractNumber AS CID
+,MAX(crp.DayDelays) AS MaxDaysDelay
+,EGN
+FROM dwh.DimCreditRepaymentPlan crp
+	  left join dwh.DimCreditSC c on c.CreditSCSK = crp.CreditSCSK
+	  left join dwh.DimCreditProposalSC cp on cp.OfferSK = c.OfferSK
+	  left join dwh.DimSProduct p on p.SProductSK = cp.SProductSK
+	  left join dwh.DimOffers o ON o.OfferSK = cp.OfferSK
+	  left join [dwh].[DimOffersStatus] os ON os.[OffStatusSK]= o.[OffStatusSK]
+	  left join dwh.DimClient cl ON cl.ClientSK = o.ClientSK
+  --where SProductID  in (2,3,7 ,8,14,18,23,24) 
+ -- AND CONVERT(DATE,DateClosed) Between @From AND @To
+  GROUP BY ContractNumber,os.[Name], p.Name, CONVERT(DATE,DateClosed), EGN
+  
+
+
+
+")
+  
+  start_time <- Sys.time()
+  Max_DD <- DBI::dbFetch(DBI::dbSendQuery(myc, Max_DD))
+  print(paste("Done in", round(difftime(Sys.time(), start_time,unit = "mins"),2), "minutes"))
+  
+  #Close the database connection
+  DBI::dbDisconnect(myc)
+}
+
+#Prohibiive Lists --READY
+{
+  #JOin by EGN
+  Moratorna_Vip_Izlizv = read_excel("//cow.easycredit.bg/FileServer/White Card/Reports BG/CC-BAR/CC- BAR Campaign/Кампании закрити кредити/Забранителни списъци/VIP_излив 01.2023.xlsx") %>%
+    select(EGN = `ЕГН`, Date_Moratorna = `I - дата преминаване Предсрочна изискуемост`, Product_moratorna =`ПРОДУКТ`) %>%
+    distinct() %>%
+    mutate(Check_Moratorna = 1)
+  
+
+  AML_NoCamaigne = read_excel("//cow.easycredit.bg/FileServer/White Card/Reports BG/Prohibitive_Lists_BG/АML_No campaigns.xlsx") %>%
+    select(EGN = `ЕГН`) %>%
+    distinct() %>%
+    mutate(AML_1 = 1,
+          EGN = as.numeric(EGN))
+  
+  AML_2 = read_excel("//cow.easycredit.bg/FileServer/White Card/Reports BG/CC-BAR/CC- BAR Campaign/Кампании закрити кредити/Забранителни списъци/АМЛ  забрана 2 а1 кредит.xlsx") %>%
+    select(EGN) %>%
+    distinct()%>%
+    mutate(AML_2 = 1)
+  
+  AML_New = read_excel("//cow.easycredit.bg/FileServer/White Card/Reports BG/CC-BAR/CC- BAR Campaign/Кампании закрити кредити/Забранителни списъци/AML_New_09.2022.xlsx") %>%
+    select(EGN = `ЕГН`) %>%
+    distinct()%>%
+    mutate(AML_New = 1)
+  
+  foreigners = read_excel("//cow.easycredit.bg/FileServer/White Card/Reports BG/Prohibitive_Lists_BG/ЕГН Чужденци.xlsx") %>%
+    select(EGN = `ЕГН`) %>%
+    distinct()%>%
+    mutate("Чужденец" = 1
+           ,EGN = as.numeric(EGN))
+  
+  Passed_EGN = read_excel("//cow.easycredit.bg/FileServer/White Card/Reports BG/Prohibitive_Lists_BG/Починали.xlsx") %>%
+    select(EGN = `ЕГН`) %>%
+    distinct()%>%
+    mutate("Починали_ЕГН" = 1)
+  
+  Workers = read_excel("//cow.easycredit.bg/FileServer/White Card/Reports BG/Prohibitive_Lists_BG/Служителски КК.xlsx") %>%
+    select(EGN = `ЕГН`) %>%
+    distinct()%>%
+    mutate("Служител" = 1) 
+  
+
+  BNB = read_excel("//cow.easycredit.bg/FileServer/White Card/Reports BG/Prohibitive_Lists_BG/Забранителен списък_Аксес Файнанс.xlsx") %>%
+    select(EGN = `ЕГН`)%>%
+    distinct()%>%
+    mutate("BNB" = 1
+           ,EGN = as.numeric(EGN)) %>%
+    drop_na()
+  
+  BlackList = read_excel("//cow.easycredit.bg/FileServer/White Card/Reports BG/Prohibitive_Lists_BG/BLACK_LIST_CHECK_ver.9.xlsx"
+                         , sheet = 2
+                         , col_names = F) %>%
+    select(EGN = `...1`) %>%
+    mutate(EGN = substr(EGN, 2,11)
+          ,EGN = as.numeric(EGN)
+          ,BlackList = 1) %>%
+    mutate(EGN = as.numeric(EGN))
+  
+  
+  BrownList = read_excel("//cow.easycredit.bg/FileServer/White Card/Reports BG/Prohibitive_Lists_BG/BROWN_LIST_CHECK_ver9.xlsx"
+                         , sheet = 2
+                         , col_names = F) %>%
+    select(EGN = `...1`) %>%
+    mutate(EGN = substr(EGN, 2,11)
+           ,EGN = as.numeric(EGN)
+           ,BrownList = 1) %>%
+    mutate(EGN = as.numeric(EGN))
+  
+  #Join by CID 
+  HItIncaso = read_excel("//cow.easycredit.bg/FileServer/White Card/Reports BG/CC-BAR/CC- BAR Campaign/Кампании закрити кредити/Забранителни списъци/ХИТ ИНКАСО.xlsx") %>%
+    select(CID = `Номер на кредит`) %>%
+    distinct() %>%
+    mutate(HitIncaso = 1)
+  
+  Incasator_Easy = read_excel("//cow.easycredit.bg/FileServer/White Card/Reports BG/CC-BAR/CC- BAR Campaign/Кампании закрити кредити/Забранителни списъци/плащания инкасатор.xlsx") %>%
+    select(CID = `Номер на кредит`) %>%
+    distinct() %>%
+    mutate(EasyIncasator = 1)
+  
+  Passed_CID = read_excel("//cow.easycredit.bg/FileServer/White Card/Reports BG/Prohibitive_Lists_BG/Починали.xlsx") %>%
+    select(CID = `КИД`) %>%
+    distinct()%>%
+    mutate("Починали_КИД" = 1
+          ,CID = as.numeric(CID))
+  
+  #Join by Phone
+  Forbiden_List = read_excel("//cow.easycredit.bg/FileServer/White Card/Reports BG/Prohibitive_Lists_BG/ЗАБРАНИТЕЛЕН СПИСЪК..xlsx") %>%
+    select(Phone = `Без формула, за засичане`)%>%
+    distinct()%>%
+    mutate("Забранителен" = 1)
+  
+
+  
+  
+  
+}
+
+#Read and Prepare administation file -- READY
+{
+  
+  Administration_File = read.csv2("//cow.easycredit.bg/FileServer/White Card/Administration/A1 Credit_Daily Report/Installment_credits.csv"
+                                  , quote="")
+  
+  A1_FastLoans = Administration_File %>%
+    select(CID = КИД, Product = Продукт, Status = Статус, EGN, Names = `Имена.клиент`, Phone = `телефон`, ContractDate = `Дата.на.договор`, Email) %>%
+    filter(Product %in% c('A1 Credit 1', 'A1 Credit 2')) %>%
+    mutate(CID = as.numeric(CID)) %>%
+    arrange(desc(CID)) %>%
+    arrange(EGN) %>%
+    mutate(EGN = as.numeric(EGN)) 
+  
+  A1_ConsumerLoan = Administration_File %>%
+    select(CID = КИД, Product = Продукт, Status = Статус, EGN, Names = `Имена.клиент`,Phone = `телефон`, ContractDate = `Дата.на.договор`, Email) %>%
+    filter(Product %in% c( 'А1 потребителски Без ГД', 'А1 потребителски ГД', 'А1 потребителски ГД 2')) %>%
+    mutate(CID = as.numeric(CID)) %>%
+    arrange(desc(CID)) %>%
+    arrange(EGN) %>%
+    mutate(EGN = as.numeric(EGN)) 
+  
+  Axi_Loan = Administration_File %>%
+    select(CID = КИД, Product = Продукт, Status = Статус, EGN, Names = `Имена.клиент`,Phone = `телефон`, ContractDate = `Дата.на.договор`, Email) %>%
+    filter(Product %in% c( 'Axi Credit 4', 'Axi Credit 4 - paper', 'Кредит от БК 4 ', 'Кредит от БК 4 - paper','Axi Credit 2', 'Axi Credit 3', 'Кредит от БК 3')) %>%
+    mutate(CID = as.numeric(CID)) %>%
+    arrange(desc(CID)) %>%
+    arrange(EGN) %>%
+    mutate(EGN = as.numeric(EGN)) 
+  
+  Cession_Loans = Administration_File %>%
+    select(EGN, Status = Статус) %>%
+    filter(Status == "Закрита с цесия") %>%
+    arrange(EGN) %>%
+    mutate(EGN = as.numeric(EGN)) %>%
+    distinct(EGN, .keep_all = T)
+  
+  A1_Loans_all_ForAXI = A1_FastLoans %>%
+    bind_rows(A1_ConsumerLoan)
+  
+  
+}
+
+#Read ERP exports --READY
+{
+  
+  #Approved
+  Approved = read_excel("//cow.easycredit.bg/FileServer/White Card/BAR/R Scripts/RScript_LoanRetention_Portfolio/Input Data/ERP_Files/Approved.xlsx") 
+    
+    Approved_All_Product = Approved %>%
+    select(Phone = `Телефон`) %>%
+    mutate(Approved_All = 1)
+  
+  Approved_A1Fast = Approved %>%
+    filter(`Продукт` %in% c('A1 Credit 1', 'A1 Credit 2')) %>%
+    select(Phone = `Телефон`) %>%
+    mutate(Approved_A1Fast = 1)
+  
+  Approved_A1Consumer = Approved %>%
+    filter(`Продукт` %in% c('А1 потребителски Без ГД', 'А1 потребителски ГД', 'А1 потребителски ГД 2')) %>%
+    select(Phone = `Телефон`) %>%
+    mutate(Approved_A1Consumer = 1)
+
+  Approved_AxiLoans = Approved %>%
+    filter(`Продукт` %in% c('Axi Credit 4', 'Axi Credit 4 - paper', 'Кредит от БК 4', 'Кредит от БК 4 - paper', 'Кредит от БК 3')) %>%
+    select(Phone = `Телефон`) %>%
+    mutate(Approved_AxiLoan = 1)
+  
+  #FOR AXI
+  Approved_A1Loans_All_ForAXI = Approved_A1Fast %>%
+    bind_rows(Approved_A1Consumer) %>%
+    select(Phone) %>%
+    mutate(A1Loans_Approved_All = 1)
+  
+  #CredidDept
+  CreditDept = read_excel("//cow.easycredit.bg/FileServer/White Card/BAR/R Scripts/RScript_LoanRetention_Portfolio/Input Data/ERP_Files/CreditDept.xlsx") %>%
+    mutate(`ЕГН` = as.numeric(`ЕГН`))
+  
+  CreditDept_All_Product = CreditDept %>%
+    select(EGN = `ЕГН`) %>%
+    mutate(CreditDept_All = 1)
+  
+   CreditDept_A1Fast = CreditDept %>%
+    filter(`Продукт` %in% c('A1 Credit 1', 'A1 Credit 2')) %>%
+    select(EGN = `ЕГН`) %>%
+    mutate(CreditDept_A1Fast = 1)
+   
+   CreditDept_A1Consumer = CreditDept %>%
+     filter(`Продукт` %in% c('А1 потребителски Без ГД', 'А1 потребителски ГД', 'А1 потребителски ГД 2')) %>%
+     select(EGN = `ЕГН`) %>%
+     mutate(CreditDept_A1Consumer = 1)
+   
+
+   CreditDept_AxiLoans = CreditDept %>%
+     filter(`Продукт` %in% c('Axi Credit 4', 'Axi Credit 4 - paper', 'Кредит от БК 4', 'Кредит от БК 4 - paper', 'Кредит от БК 3')) %>%
+     select(EGN = `ЕГН`) %>%
+     mutate(CreditDept_AxLoan = 1)
+   
+   #ForAXI
+   CreditDept_A1Loans_All_ForAXI = CreditDept_A1Fast %>%
+     bind_rows(CreditDept_A1Consumer) %>%
+     select(EGN) %>%
+     mutate(A1Loans_CreditDept_All = 1)
+  
+}
+
+#Aggregate tables in list for faster join NOT WORKING
+{
+  
+  #Prohibitive EGN
+  list_Prohibitive_List_EGN = list(Moratorna_Vip_Izlizv 
+                                   ,AML_NoCamaigne
+                                   ,AML_2
+                                   ,AML_New
+                                   ,foreigners
+                                   ,Passed_EGN
+                                   ,Workers
+                                   ,BNB
+                                   ,BlackList
+                                   ,BrownList) %>%
+    reduce(left_join, by = "EGN")
+  
+  #Prohibitive CID
+  list_Prohibitive_List_CID = list(HItIncaso  
+                                   ,Incasator_Easy
+                                   ,Passed_CID) %>%
+    reduce(left_join, by = "CID") %>%
+    drop_na()
+  
+  #ERP Approved
+  
+  List_Approved = list(Approved_All_Product
+                      ,Approved_A1Fast
+                      ,Approved_A1Consumer) %>%
+    reduce(left_join, by = "Phone")
+  
+  List_CreditDept = list(CreditDept_All_Product
+                        ,CreditDept_A1Fast
+                        ,CreditDept_A1Consumer)%>%
+    reduce(left_join, by = "EGN")
+  
+  
+}
+
+#Making the A1 FAST Retention Base
+{
+
+  A1_FastLoan_NEW_BASE = Closed_Loans_All %>%
+    filter(Product %in% c('A1 Credit 1', 'A1 Credit 2')) %>% 
+    left_join(select(A1_FastLoans, -Product, -Status ), by = "CID") %>%
+    arrange(desc(CID)) %>%
+    arrange(EGN) %>%
+    left_join(select(A1_FastLoans, EGN, CID, Product, Status, Names), by = "EGN", suffix = c("", "_A1_Fast")) %>%
+    distinct(CID, .keep_all = T) %>%
+    left_join(select(A1_ConsumerLoan, EGN, CID, Product, Status, Names), by = "EGN", suffix = c("", "_A1_Consumer")) %>%
+    distinct(CID, .keep_all = T) %>%
+    left_join(Cession_Loans, by = "EGN", suffix = c("", "_Cession_Loan")) %>%
+    left_join(select(Axi_Loan, EGN, CID, Product, Status, Names), by = "EGN", suffix = c("", "_Axi_Loan")) %>%
+    distinct(CID, .keep_all = T) %>%
+    left_join(A1_FastLoan_AllBase_Processed_CID, by = "CID", suffix = c("", "_Proccesed_CID_INFO")) %>%
+    left_join(A1_FastLoan_AllBase_Processed_EGN, by = "EGN", suffix = c("", "_Proccesed_EGN_INFO")) %>%
+    left_join(A1_FastLoan_OldCampaign, by = "CID") %>%
+    mutate("NEw/OLD" = ifelse(is.na(Call_OLD), "NEW","OLD")) %>%
+    group_by(EGN) %>%
+    dplyr::mutate(CountIF = n()) %>%
+    ungroup() %>%
+    group_by(EGN) %>%
+    dplyr::mutate("IF" = row_number()) %>%
+    ungroup() %>%
+    left_join(select(Max_DD, -EGN), by = "CID") %>%
+    left_join(DD_LastInstalment, by = "CID") %>%
+    mutate("MaxDD_Over90" = ifelse(MaxDaysDelay <= 90, "Pod90", "Nad90")
+           ,"MaxDD_Over100" = ifelse(MaxDaysDelay <= 100, "Pod100", "Nad100")
+           ,"LastInstalment_DD_Over90" = ifelse(DaysDelay_lastInstalment <= 90,"Pod90", "Nad90")
+           ,"LastInstalment_DD_Over100" = ifelse(DaysDelay_lastInstalment <= 100,"Pod100", "Nad100")) %>%
+    left_join(Moratorna_Vip_Izlizv, by = "EGN") %>%
+    distinct(CID, .keep_all = T) %>%
+    left_join(AML_NoCamaigne, by = "EGN") %>%
+    distinct(CID, .keep_all = T) %>%
+    left_join(AML_2, by = "EGN") %>%
+    distinct(CID, .keep_all = T) %>%
+    left_join(AML_New, by = "EGN") %>%
+    distinct(CID, .keep_all = T) %>%
+    left_join(foreigners, by = "EGN") %>%
+    distinct(CID, .keep_all = T) %>%
+    left_join(Passed_EGN, by = "EGN") %>%
+    distinct(CID, .keep_all = T) %>%
+    left_join(Workers, by = "EGN") %>%
+    distinct(CID, .keep_all = T) %>%
+    left_join(BNB, by = "EGN") %>%
+    distinct(CID, .keep_all = T) %>%
+    left_join(BlackList, by = "EGN") %>%
+    distinct(CID, .keep_all = T) %>%
+    left_join(BrownList, by = "EGN") %>%
+    distinct(CID, .keep_all = T) %>%
+    
+    left_join(HItIncaso, by = "CID") %>%
+    distinct(CID, .keep_all = T) %>%
+    left_join(Incasator_Easy, by = "CID") %>%
+    distinct(CID, .keep_all = T) %>%
+    left_join(Passed_CID, by = "CID") %>%
+    distinct(CID, .keep_all = T) %>%
+    
+    left_join(Forbiden_List, by = "Phone") %>%
+    distinct(CID, .keep_all = T) %>%
+    
+
+    left_join(List_Approved, by = "Phone") %>%
+    distinct(CID, .keep_all = T) %>%
+    left_join(List_CreditDept, by = "EGN") %>%
+    distinct(CID, .keep_all = T) %>%
+    mutate(Call_NEW = case_when(IF != 1 ~ "дубликати ( предходно закрити кредити ,след този имат и други закрити, разглеждаме само последният)"
+                                ,Status_A1_Fast %in% c("С подписан договор", "Одобрен") ~ "Вече има А1 бърз кредит, следващ"
+                                ,Status_A1_Fast == "Закрита с цесия" ~ "Закрита с цесия а1 кредти"
+                                ,Status_Cession_Loan == "Закрита с цесия" ~ "Закрита с цесия а1 кредти"
+                                ,!is.na(Status_A1_Consumer) ~ "има А1 потребителски кредти"
+                                ,BNB == 1 ~ "БНБ"
+                                ,BrownList == 1 ~ "Кафяв"
+                                ,BlackList == 1 ~ "черен"
+                                ,Check_Moratorna == 1 ~ "Мораторна КК"
+                                ,CreditDept_All == 1 ~ "В КО"
+                                ,Approved_All == 1 ~ "одобрен за друг продукт"
+                                ,!is.na(Status_Axi_Loan) ~ "има AXI кредит с подписан/Закрит"
+                                ,Чужденец == 1 ~ "Чужденец"
+                                ,AML_New == 1 ~ "AML_NEW"
+                                ,AML_2 == 1 ~ "амл НО"
+                                ,AML_1 == 1 ~ "амл забрана"
+                                ,EasyIncasator == 1 ~ "изи над 90"
+                                ,HitIncaso == 1 ~ "Хит-а"
+                                ,Починали_КИД == 1 ~ "починал"
+                                ,Починали_ЕГН == 1 ~ "починал"
+                                ,Забранителен == 1 ~ "Забранителен"
+                                ,Служител == 1 ~ "Служител"
+                                ,MaxDaysDelay >= 90 ~ "Над 90"
+                                ,DaysDelay_lastInstalment  >= 90 ~ "Над 90"
+                                ,Call_OLD == "***НЕ ИСКА ПОВЕЧЕ НИКОГА ДА ГО ТЪРСИМ" ~ "***НЕ ИСКА ПОВЕЧЕ НИКОГА ДА ГО ТЪРСИМ"
+                                ,Call_OLD == "SMS" ~ "SMS"
+                                ,Call_OLD == "SMS_Ненамерен" ~ "SMS_Ненамерен"
+                                ,Call_OLD == "К е извън страната /живее в чужбина" ~ "К е извън страната /живее в чужбина"
+                                ,Call_OLD == "НЕ ОТГОВАРЯ НА УСЛОВИЯТА" ~ "НЕ ОТГОВАРЯ НА УСЛОВИЯТА"
+                                ,Call_OLD == "НЕКОНТАКТЕН" ~ "НЕКОНТАКТЕН"
+                                ,Call_OLD == "Откази пр. Стари К до 6м" ~ "Откази пр. Стари К до 6м"
+                                ,Call_OLD == "ПОЧИНАЛ" ~ "ПОЧИНАЛ"
+                                ,Call_OLD == "Служител" ~ "Служител"
+                                ,Call_OLD == "черен" ~ "черен"
+                                ,Call_OLD == "Кафяв" ~ "Кафяв"
+                                ,Call_OLD == "амл НО" ~ "амл НО"
+                                ,is.na(Call_OLD) & Result_Proccesed_EGN_INFO %in% c("SMS_Ненамерен", "SMS", "SMS_Ненамерен_пред.месец") ~ "SMS"
+                                ,is.na(Call_OLD) & Result_Proccesed_EGN_INFO %in% c("ОТКАЗВА С ПРЕЗЕНТАЦИЯ", "ОТКАЗВА БЕЗ ПРЕЗЕНТАЦИЯ / Директно затваря/") ~ "Откази пр. Стари К до 6м"
+                                ,is.na(Call_OLD) & Result_Proccesed_EGN_INFO %in% c("НЕ ОТГОВАРЯ НА УСЛОВИЯТА") ~ "НЕ ОТГОВАРЯ НА УСЛОВИЯТА"
+                                ,is.na(Call_OLD) & Result_Proccesed_EGN_INFO %in% c("К е извън страната /живее в чужбина") ~ "К е извън страната /живее в чужбина"
+                                ,Call_OLD == "Call" | Call_OLD == "Call_2" | Call_OLD == "CALL" ~ "От последната кампания"
+                                ,Result_Proccesed_EGN_INFO %in% c("SMS_Ненамерен", "SMS", "SMS_Ненамерен_пред.месец") ~ "SMS"
+                                ,Result_Proccesed_EGN_INFO %in% c("ОТКАЗВА С ПРЕЗЕНТАЦИЯ", "ОТКАЗВА БЕЗ ПРЕЗЕНТАЦИЯ / Директно затваря/") ~ "Откази пр. Стари К до 6м"
+                                ,Result_Proccesed_EGN_INFO %in% c("НЕ ОТГОВАРЯ НА УСЛОВИЯТА") ~ "НЕ ОТГОВАРЯ НА УСЛОВИЯТА"
+                                ,Result_Proccesed_EGN_INFO %in% c("К е извън страната /живее в чужбина") ~ "К е извън страната /живее в чужбина"
+                                ,Result_Proccesed_EGN_INFO %in% c("НЕКОНТАКТЕН") ~ "НЕКОНТАКТЕН"
+                                ,TRUE ~ "CALL"
+                                ))
+
+    #join_all(list_Prohibitive_List_EGN, by = "EGN", type = "left", match = "first")
+  #,"LastInstalmet_Over90" = ifelse(DD_LastInstalment <= 90, "Pod90", "Nad90") NE SE ZNAE ZASTO NE RABOTI!!!
+  #,"LastInstalmet_Over100" = ifelse(DD_LastInstalment <= 100, "Pod100", "Nad100"))
+  #join(select(A1_FastLoans, EGN, CID, Product, Status, Names)
+  #    , by = "EGN", type = "left", match = "first") %>% #JOin only by first match(like VLOOKUP)
+  #join(select(A1_ConsumerLoan, EGN, CID, Product, Status, Names), by = "EGN", type = "left", match = "first")
+    
+    
+  
+
+  
+}
+
+#Making the A1 Consumer Retention Base
+{
+  
+  A1_Consumer_NEW_BASE = Closed_Loans_All %>%
+    filter(Product %in% c('А1 потребителски Без ГД', 'А1 потребителски ГД', 'А1 потребителски ГД 2')) %>% 
+    left_join(select(A1_ConsumerLoan, -Product, -Status ), by = "CID") %>%
+    
+    arrange(desc(CID)) %>%
+    arrange(EGN) %>%
+    left_join(select(A1_FastLoans, EGN, CID, Product, Status, Names), by = "EGN", suffix = c("", "_A1_Fast")) %>%
+    distinct(CID, .keep_all = T) %>%
+    left_join(select(A1_ConsumerLoan, EGN, CID, Product, Status, Names), by = "EGN", suffix = c("", "_A1_Consumer")) %>%
+    distinct(CID, .keep_all = T) %>%
+    left_join(Cession_Loans, by = "EGN", suffix = c("", "_Cession_Loan")) %>%
+    left_join(select(Axi_Loan, EGN, CID, Product, Status, Names), by = "EGN", suffix = c("", "_Axi_Loan")) %>%
+    distinct(CID, .keep_all = T) %>%
+    
+    left_join(A1_ConsumerLoan_AllBase_Processed_CID, by = "CID", suffix = c("", "_Proccesed_CID_INFO")) %>%
+    left_join(A1_ConsumerLoan_AllBase_Processed_EGN, by = "EGN", suffix = c("", "_Proccesed_EGN_INFO")) %>%
+    left_join(A1_ConsumerLoan_OldCampaign, by = "CID") %>%
+    
+    mutate("NEw/OLD" = ifelse(is.na(Call_OLD), "NEW","OLD")) %>%
+    group_by(EGN) %>%
+    dplyr::mutate(CountIF = n()) %>%
+    ungroup() %>%
+    group_by(EGN) %>%
+    dplyr::mutate("IF" = row_number()) %>%
+    ungroup() %>%
+    left_join(select(Max_DD, -EGN), by = "CID") %>%
+    left_join(DD_LastInstalment, by = "CID") %>%
+    mutate("MaxDD_Over90" = ifelse(MaxDaysDelay <= 90, "Pod90", "Nad90")
+           ,"MaxDD_Over100" = ifelse(MaxDaysDelay <= 100, "Pod100", "Nad100")
+           ,"LastInstalment_DD_Over90" = ifelse(DaysDelay_lastInstalment <= 90,"Pod90", "Nad90")
+           ,"LastInstalment_DD_Over100" = ifelse(DaysDelay_lastInstalment <= 100,"Pod100", "Nad100")) %>%
+    left_join(Moratorna_Vip_Izlizv, by = "EGN") %>%
+    distinct(CID, .keep_all = T) %>%
+    left_join(AML_NoCamaigne, by = "EGN") %>%
+    distinct(CID, .keep_all = T) %>%
+    left_join(AML_2, by = "EGN") %>%
+    distinct(CID, .keep_all = T) %>%
+    left_join(AML_New, by = "EGN") %>%
+    distinct(CID, .keep_all = T) %>%
+    left_join(foreigners, by = "EGN") %>%
+    distinct(CID, .keep_all = T) %>%
+    left_join(Passed_EGN, by = "EGN") %>%
+    distinct(CID, .keep_all = T) %>%
+    left_join(Workers, by = "EGN") %>%
+    distinct(CID, .keep_all = T) %>%
+    left_join(BNB, by = "EGN") %>%
+    distinct(CID, .keep_all = T) %>%
+    left_join(BlackList, by = "EGN") %>%
+    distinct(CID, .keep_all = T) %>%
+    left_join(BrownList, by = "EGN") %>%
+    distinct(CID, .keep_all = T) %>%
+    
+    left_join(HItIncaso, by = "CID") %>%
+    distinct(CID, .keep_all = T) %>%
+    left_join(Incasator_Easy, by = "CID") %>%
+    distinct(CID, .keep_all = T) %>%
+    left_join(Passed_CID, by = "CID") %>%
+    distinct(CID, .keep_all = T) %>%
+    
+    left_join(Forbiden_List, by = "Phone") %>%
+    distinct(CID, .keep_all = T) %>%
+    
+    
+    left_join(List_Approved, by = "Phone") %>%
+    distinct(CID, .keep_all = T) %>%
+    left_join(List_CreditDept, by = "EGN") %>%
+    distinct(CID, .keep_all = T) %>%
+    mutate(Call_NEW = case_when(IF != 1 ~ "дубликати ( предходно закрити кредити ,след този имат и други закрити, разглеждаме само последният)"
+                                ,Status_A1_Consumer %in% c("С подписан договор", "Одобрен") ~ "Вече има А1 бърз кредит, следващ"
+                                ,Status_A1_Consumer == "Закрита с цесия" ~ "Закрита с цесия а1 кредти"
+                                ,Status_Cession_Loan == "Закрита с цесия" ~ "Закрита с цесия а1 кредти"
+                                ,!is.na(Status_A1_Fast) ~ "има А1 бърз кредти"
+                                ,BNB == 1 ~ "БНБ"
+                                ,BrownList == 1 ~ "Кафяв"
+                                ,BlackList == 1 ~ "черен"
+                                ,Check_Moratorna == 1 ~ "Мораторна КК"
+                                ,CreditDept_All == 1 ~ "В КО"
+                                ,Approved_All == 1 ~ "одобрен за друг продукт"
+                                ,!is.na(Status_Axi_Loan) ~ "има AXI кредит с подписан/Закрит"
+                                ,Чужденец == 1 ~ "Чужденец"
+                                ,AML_New == 1 ~ "AML_NEW"
+                                ,AML_2 == 1 ~ "амл НО"
+                                ,AML_1 == 1 ~ "амл забрана"
+                                ,EasyIncasator == 1 ~ "изи над 90"
+                                ,HitIncaso == 1 ~ "Хит-а"
+                                ,Починали_КИД == 1 ~ "починал"
+                                ,Починали_ЕГН == 1 ~ "починал"
+                                ,Забранителен == 1 ~ "Забранителен"
+                                ,Служител == 1 ~ "Служител"
+                                ,MaxDaysDelay >= 90 ~ "Над 90"
+                                ,DaysDelay_lastInstalment  >= 90 ~ "Над 90"
+                                ,Call_OLD == "***НЕ ИСКА ПОВЕЧЕ НИКОГА ДА ГО ТЪРСИМ" ~ "***НЕ ИСКА ПОВЕЧЕ НИКОГА ДА ГО ТЪРСИМ"
+                                ,Call_OLD == "SMS" ~ "SMS"
+                                ,Call_OLD == "SMS_Ненамерен" ~ "SMS_Ненамерен"
+                                ,Call_OLD == "К е извън страната /живее в чужбина" ~ "К е извън страната /живее в чужбина"
+                                ,Call_OLD == "НЕ ОТГОВАРЯ НА УСЛОВИЯТА" ~ "НЕ ОТГОВАРЯ НА УСЛОВИЯТА"
+                                ,Call_OLD == "НЕКОНТАКТЕН" ~ "НЕКОНТАКТЕН"
+                                ,Call_OLD == "Откази пр. Стари К до 6м" ~ "Откази пр. Стари К до 6м"
+                                ,Call_OLD == "ПОЧИНАЛ" ~ "ПОЧИНАЛ"
+                                ,Call_OLD == "Служител" ~ "Служител"
+                                ,Call_OLD == "черен" ~ "черен"
+                                ,Call_OLD == "Кафяв" ~ "Кафяв"
+                                ,Call_OLD == "амл НО" ~ "амл НО"
+                                ,is.na(Call_OLD) & Result_Proccesed_EGN_INFO %in% c("SMS_Ненамерен", "SMS", "SMS_Ненамерен_пред.месец") ~ "SMS"
+                                ,is.na(Call_OLD) & Result_Proccesed_EGN_INFO %in% c("ОТКАЗВА С ПРЕЗЕНТАЦИЯ", "ОТКАЗВА БЕЗ ПРЕЗЕНТАЦИЯ / Директно затваря/") ~ "Откази пр. Стари К до 6м"
+                                ,is.na(Call_OLD) & Result_Proccesed_EGN_INFO %in% c("НЕ ОТГОВАРЯ НА УСЛОВИЯТА") ~ "НЕ ОТГОВАРЯ НА УСЛОВИЯТА"
+                                ,is.na(Call_OLD) & Result_Proccesed_EGN_INFO %in% c("К е извън страната /живее в чужбина") ~ "К е извън страната /живее в чужбина"
+                                ,Call_OLD == "Call" | Call_OLD == "Call_2" | Call_OLD == "CALL" ~ "От последната кампания"
+                                ,Result_Proccesed_EGN_INFO %in% c("SMS_Ненамерен", "SMS", "SMS_Ненамерен_пред.месец") ~ "SMS"
+                                ,Result_Proccesed_EGN_INFO %in% c("ОТКАЗВА С ПРЕЗЕНТАЦИЯ", "ОТКАЗВА БЕЗ ПРЕЗЕНТАЦИЯ / Директно затваря/") ~ "Откази пр. Стари К до 6м"
+                                ,Result_Proccesed_EGN_INFO %in% c("НЕ ОТГОВАРЯ НА УСЛОВИЯТА") ~ "НЕ ОТГОВАРЯ НА УСЛОВИЯТА"
+                                ,Result_Proccesed_EGN_INFO %in% c("К е извън страната /живее в чужбина") ~ "К е извън страната /живее в чужбина"
+                                ,Result_Proccesed_EGN_INFO %in% c("Invalid number") ~ "Invalid number"
+                                ,Result_Proccesed_EGN_INFO %in% c("НЕКОНТАКТЕН") ~ "НЕКОНТАКТЕН"
+                                ,TRUE ~ "CALL"
+    ))
+  
+  #join_all(list_Prohibitive_List_EGN, by = "EGN", type = "left", match = "first")
+  #,"LastInstalmet_Over90" = ifelse(DD_LastInstalment <= 90, "Pod90", "Nad90") NE SE ZNAE ZASTO NE RABOTI!!!
+  #,"LastInstalmet_Over100" = ifelse(DD_LastInstalment <= 100, "Pod100", "Nad100"))
+  #join(select(A1_FastLoans, EGN, CID, Product, Status, Names)
+  #    , by = "EGN", type = "left", match = "first") %>% #JOin only by first match(like VLOOKUP)
+  #join(select(A1_ConsumerLoan, EGN, CID, Product, Status, Names), by = "EGN", type = "left", match = "first")
+  
+  
+  
+  
+  
+}
+
+#Making the AxiLoan Retention Base
+{
+  
+  Axi_Loan_NEW_BASE = Closed_Loans_All %>%
+    filter(Product %in% c('Axi Credit 4', 'Axi Credit 4 - paper', 'Кредит от БК 4 ', 'Кредит от БК 4 - paper')) %>% 
+    left_join(select(Axi_Loan, -Product, -Status ), by = "CID") %>%
+    
+    arrange(desc(CID)) %>%
+    arrange(EGN) %>%
+    #left_join(select(A1_FastLoans, EGN, CID, Product, Status, Names), by = "EGN", suffix = c("", "_A1_Fast")) %>%
+    #distinct(CID, .keep_all = T) %>%
+    #left_join(select(A1_ConsumerLoan, EGN, CID, Product, Status, Names), by = "EGN", suffix = c("", "_A1_Consumer")) %>%
+    #distinct(CID, .keep_all = T) %>%
+    left_join(select(A1_Loans_all_ForAXI, EGN, CID, Product, Status, Names), by = "EGN", suffix = c("", "_A1_All_Loans")) %>%
+    distinct(CID, .keep_all = T) %>%
+    
+    left_join(Cession_Loans, by = "EGN", suffix = c("", "_Cession_Loan")) %>%
+    left_join(select(Axi_Loan, EGN, CID, Product, Status, Names), by = "EGN", suffix = c("", "_Axi_Loan")) %>%
+    distinct(CID, .keep_all = T) %>%
+    
+    left_join(Axi_Loan_AllBase_Processed_CID, by = "CID", suffix = c("", "_Proccesed_CID_INFO")) %>%
+    left_join(Axi_Loan_AllBase_Processed_EGN, by = "EGN", suffix = c("", "_Proccesed_EGN_INFO")) %>%
+    left_join(AxiLoan_OldCampaign, by = "CID") %>%
+    
+    mutate("NEw/OLD" = ifelse(is.na(Call_OLD), "NEW","OLD")) %>%
+    group_by(EGN) %>%
+    dplyr::mutate(CountIF = n()) %>%
+    ungroup() %>%
+    group_by(EGN) %>%
+    dplyr::mutate("IF" = row_number()) %>%
+    ungroup() %>%
+    left_join(select(Max_DD, -EGN), by = "CID") %>%
+    left_join(DD_LastInstalment, by = "CID") %>%
+    mutate("MaxDD_Over90" = ifelse(MaxDaysDelay <= 90, "Pod90", "Nad90")
+           ,"MaxDD_Over100" = ifelse(MaxDaysDelay <= 100, "Pod100", "Nad100")
+           ,"LastInstalment_DD_Over90" = ifelse(DaysDelay_lastInstalment <= 90,"Pod90", "Nad90")
+           ,"LastInstalment_DD_Over100" = ifelse(DaysDelay_lastInstalment <= 100,"Pod100", "Nad100")) %>%
+    left_join(Moratorna_Vip_Izlizv, by = "EGN") %>%
+    distinct(CID, .keep_all = T) %>%
+    left_join(AML_NoCamaigne, by = "EGN") %>%
+    distinct(CID, .keep_all = T) %>%
+    left_join(AML_2, by = "EGN") %>%
+    distinct(CID, .keep_all = T) %>%
+    left_join(AML_New, by = "EGN") %>%
+    distinct(CID, .keep_all = T) %>%
+    left_join(foreigners, by = "EGN") %>%
+    distinct(CID, .keep_all = T) %>%
+    left_join(Passed_EGN, by = "EGN") %>%
+    distinct(CID, .keep_all = T) %>%
+    left_join(Workers, by = "EGN") %>%
+    distinct(CID, .keep_all = T) %>%
+    left_join(BNB, by = "EGN") %>%
+    distinct(CID, .keep_all = T) %>%
+    left_join(BlackList, by = "EGN") %>%
+    distinct(CID, .keep_all = T) %>%
+    left_join(BrownList, by = "EGN") %>%
+    distinct(CID, .keep_all = T) %>%
+    
+    left_join(HItIncaso, by = "CID") %>%
+    distinct(CID, .keep_all = T) %>%
+    left_join(Incasator_Easy, by = "CID") %>%
+    distinct(CID, .keep_all = T) %>%
+    left_join(Passed_CID, by = "CID") %>%
+    distinct(CID, .keep_all = T) %>%
+    
+    left_join(Forbiden_List, by = "Phone") %>%
+    distinct(CID, .keep_all = T) %>%
+    
+    
+    left_join(List_Approved, by = "Phone") %>%
+    distinct(CID, .keep_all = T) %>%
+    left_join(List_CreditDept, by = "EGN") %>%
+    distinct(CID, .keep_all = T) %>%
+    mutate(Call_NEW = case_when(IF != 1 ~ "дубликати ( предходно закрити кредити ,след този имат и други закрити, разглеждаме само последният)"
+                                ,Status_Axi_Loan %in% c("С подписан договор", "Одобрен") ~ "Има AxiCredit"
+                                ,Status_Axi_Loan == "Закрита с цесия" ~ "Закрит с цесия Акси кредит"
+                                ,Status_Cession_Loan == "Закрита с цесия" ~ "Закрит с цесия Акси кредит"
+                                ,!is.na(Status_A1_All_Loans) ~ "има А1 кредти"
+                                ,BNB == 1 ~ "БНБ"
+                                ,BrownList == 1 ~ "Кафяв"
+                                ,BlackList == 1 ~ "черен"
+                                ,Check_Moratorna == 1 ~ "Мораторна КК"
+                                ,CreditDept_All == 1 ~ "В КО"
+                                ,Approved_All == 1 ~ "одобрен за друг продукт"
+                                #,!is.na(Status_Axi_Loan) ~ "има AXI кредит с подписан/Закрит"
+                                ,Чужденец == 1 ~ "Чужденец"
+                                ,AML_New == 1 ~ "AML_NEW"
+                                ,AML_2 == 1 ~ "амл НО"
+                                ,AML_1 == 1 ~ "амл забрана"
+                                ,EasyIncasator == 1 ~ "изи над 90"
+                                ,HitIncaso == 1 ~ "Хит-а"
+                                ,Починали_КИД == 1 ~ "починал"
+                                ,Починали_ЕГН == 1 ~ "починал"
+                                ,Забранителен == 1 ~ "Забранителен"
+                                ,Служител == 1 ~ "Служител"
+                                ,MaxDaysDelay >= 90 ~ "Над 90"
+                                ,DaysDelay_lastInstalment  >= 90 ~ "Над 90"
+                                ,Call_OLD == "***НЕ ИСКА ПОВЕЧЕ НИКОГА ДА ГО ТЪРСИМ" ~ "***НЕ ИСКА ПОВЕЧЕ НИКОГА ДА ГО ТЪРСИМ"
+                                ,Call_OLD == "SMS" ~ "SMS"
+                                ,Call_OLD == "SMS_Ненамерен" ~ "SMS_Ненамерен"
+                                ,Call_OLD == "К е извън страната /живее в чужбина" ~ "К е извън страната /живее в чужбина"
+                                ,Call_OLD == "НЕ ОТГОВАРЯ НА УСЛОВИЯТА" ~ "НЕ ОТГОВАРЯ НА УСЛОВИЯТА"
+                                ,Call_OLD == "НЕКОНТАКТЕН" ~ "НЕКОНТАКТЕН"
+                                ,Call_OLD == "Откази пр. Стари К до 6м" ~ "Откази пр. Стари К до 6м"
+                                ,Call_OLD == "ПОЧИНАЛ" ~ "ПОЧИНАЛ"
+                                ,Call_OLD == "Служител" ~ "Служител"
+                                ,Call_OLD == "черен" ~ "черен"
+                                ,Call_OLD == "Кафяв" ~ "Кафяв"
+                                ,Call_OLD == "амл НО" ~ "амл НО"
+                                ,is.na(Call_OLD) & Result_Proccesed_EGN_INFO %in% c("SMS_Ненамерен", "SMS", "SMS_Ненамерен_пред.месец") ~ "SMS"
+                                ,is.na(Call_OLD) & Result_Proccesed_EGN_INFO %in% c("ОТКАЗВА С ПРЕЗЕНТАЦИЯ", "ОТКАЗВА БЕЗ ПРЕЗЕНТАЦИЯ / Директно затваря/") ~ "Откази пр. Стари К до 6м"
+                                ,is.na(Call_OLD) & Result_Proccesed_EGN_INFO %in% c("НЕ ОТГОВАРЯ НА УСЛОВИЯТА") ~ "НЕ ОТГОВАРЯ НА УСЛОВИЯТА"
+                                ,is.na(Call_OLD) & Result_Proccesed_EGN_INFO %in% c("К е извън страната /живее в чужбина") ~ "К е извън страната /живее в чужбина"
+                                ,Call_OLD == "Call" | Call_OLD == "Call_2" | Call_OLD == "CALL" ~ "От последната кампания"
+                                ,Result_Proccesed_EGN_INFO %in% c("SMS_Ненамерен", "SMS", "SMS_Ненамерен_пред.месец") ~ "SMS"
+                                ,Result_Proccesed_EGN_INFO %in% c("ОТКАЗВА С ПРЕЗЕНТАЦИЯ", "ОТКАЗВА БЕЗ ПРЕЗЕНТАЦИЯ / Директно затваря/") ~ "Откази пр. Стари К до 6м"
+                                ,Result_Proccesed_EGN_INFO %in% c("НЕ ОТГОВАРЯ НА УСЛОВИЯТА") ~ "НЕ ОТГОВАРЯ НА УСЛОВИЯТА"
+                                ,Result_Proccesed_EGN_INFO %in% c("К е извън страната /живее в чужбина") ~ "К е извън страната /живее в чужбина"
+                                ,Call_OLD == "Invalid number" ~ "Invalid number"
+                                ,Call_OLD == "SMS_ненамерени СТАРИ кампании" ~ "SMS_ненамерени СТАРИ кампании"
+                                ,Call_OLD == "Стари откази" ~ "Стари откази"
+                                ,Call_OLD == "AML NO" ~ "AML NO"
+                                ,Call_OLD == "К е извън страната /живее в чужбина/" ~ "К е извън страната /живее в чужбина/"
+                                ,Call_OLD == "Ще закрие БК - не желае др. продукти" ~ "Ще закрие БК - не желае др. продукти"
+                                ,Result_Proccesed_EGN_INFO %in% c("НЕКОНТАКТЕН") ~ "НЕКОНТАКТЕН"
+                                ,TRUE ~ "CALL"
+    ))
+  
+  #join_all(list_Prohibitive_List_EGN, by = "EGN", type = "left", match = "first")
+  #,"LastInstalmet_Over90" = ifelse(DD_LastInstalment <= 90, "Pod90", "Nad90") NE SE ZNAE ZASTO NE RABOTI!!!
+  #,"LastInstalmet_Over100" = ifelse(DD_LastInstalment <= 100, "Pod100", "Nad100"))
+  #join(select(A1_FastLoans, EGN, CID, Product, Status, Names)
+  #    , by = "EGN", type = "left", match = "first") %>% #JOin only by first match(like VLOOKUP)
+  #join(select(A1_ConsumerLoan, EGN, CID, Product, Status, Names), by = "EGN", type = "left", match = "first")
+  
+  
+  
+  
+  
+}
+
+write_xlsx(A1_FastLoan_NEW_BASE, paste0("//cow.easycredit.bg/FileServer/White Card/Reports BG/CC-BAR/CC- BAR Campaign/Кампании закрити кредити/База на всички закрити последно проверени/А1 кредит ",DateForFile,".xlsx"))
+write_xlsx(A1_Consumer_NEW_BASE, paste0("//cow.easycredit.bg/FileServer/White Card/Reports BG/CC-BAR/CC- BAR Campaign/Кампании закрити кредити/База на всички закрити последно проверени/А1 потребителски ",DateForFile,".xlsx"))
+write_xlsx(Axi_Loan_NEW_BASE, paste0("//cow.easycredit.bg/FileServer/White Card/Reports BG/CC-BAR/CC- BAR Campaign/Кампании закрити кредити/База на всички закрити последно проверени/AXi credit 4 ",DateForFile,".xlsx"))
