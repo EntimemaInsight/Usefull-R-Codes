@@ -1,7 +1,6 @@
 # Load libraries
 library(tidyverse)
 library(odbc)
-library(DBI)
 library(data.table)
 library(readxl)
 library(writexl)
