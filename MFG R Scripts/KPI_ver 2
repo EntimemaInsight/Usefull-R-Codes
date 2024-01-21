@@ -1,0 +1,3853 @@
+# Load libraries
+library(dplyr)
+library(odbc)
+library(DBI)
+#library(readr)
+library(data.table)
+library(readxl)
+library(writexl)
+library(dplyr)
+library(tidyr)
+library(rlang)
+library(tidyverse)
+library(norm)
+library(reshape2)
+library(openxlsx)
+library(lubridate)
+library(taskscheduleR)
+CurrentDate <- paste0(format(Sys.time(),"%d.%m.%Y_%H.%M"),'.rds')
+options(scipen = 999)
+
+Product_Agg = read_excel("//cow.easycredit.bg/FileServer/White Card/BAR/R Scripts/Rscript_KPI_report_SQL/Input Data/Product_Aggregate.xlsx") 
+#Product_Agg = read_excel("J:/BAR/R Scripts/Rscript_KPI_report_SQL/Input Data/Product_Aggregate.xlsx") 
+
+#For checking approved cards in POland and Romania in SQL wiht CID, we should join DimCards by cardSK, NOT CLientSK!!!!
+
+
+#script_path = "//cow.easycredit.bg/FileServer/White Card/BAR/R_Automation/030_KPI_ver2.R"
+#
+#taskscheduler_create(
+#  taskname = "KPI_Automation_ver3",
+#  rscript = script_path,
+#  schedule = "DAILY",
+#  starttime = "08:30",
+#  startdate = format(Sys.Date(), "%d/%m/%Y")
+#)
+
+
+lastrundate = readRDS("//cow.easycredit.bg/FileServer/White Card/BAR/R Scripts/Rscript_KPI_report_SQL/Output Data/LastRunDate.rds")
+Today = Sys.Date() 
+CheckDate = format(Today, format ="%d") 
+CurrentMonth <- as.numeric(format(Today, format ="%m")) #- 5
+CurrentYear = format(Today, format ="%Y")
+
+
+#DateForFIle
+
+if (CheckDate == "01") {
+  Date_For_file = paste0(CurrentYear, sprintf("%02d", as.numeric(CurrentMonth) - 1))
+} else {
+  Date_For_file = paste0(CurrentYear, sprintf("%02d", as.numeric(CurrentMonth)))
+}
+
+##DateForFiles
+#if (CheckDate == "01" & (CurrentMonth == "10" || CurrentMonth == "11" || CurrentMonth == "12")){
+#  Date_For_file = paste0(CurrentYear,CurrentMonth - 1)
+#}else if (CheckDate != "01"& (CurrentMonth == "10" || CurrentMonth == "11" || CurrentMonth == "12")){
+#  Date_For_file = paste0(CurrentYear,CurrentMonth)
+#} else {
+#  Date_For_file = paste0(CurrentYear,"0", CurrentMonth )
+#}
+
+#DateForFiles
+#   if (CheckDate == "01") {
+#     
+#     Date_For_file = paste0(CurrentYear,"0",CurrentMonth -1)
+#     
+#     } else {
+#       
+#       Date_For_file = paste0(CurrentYear,"0", CurrentMonth)
+#   }
+#
+
+# Bulgaria Quries Load!
+{
+  #Approved Clients BG  
+  {
+    myc <- DBI::dbConnect(odbc::odbc()
+                          , driver = "SQL Server"
+                          , server = "scorpio.smartitbg.int"
+                          , database = "BIsmartWCBG"
+    )
+    
+    AppCards_BG <- paste0(" declare @CurrentDate date = getdate();
+declare @FirstOfMonth date = case when day(getdate())=1 then DATEADD(DAY,1,EOMONTH(@CurrentDate,-2)) else DATEADD(DAY,1,EOMONTH(@CurrentDate,-1)) end; 
+
+SELECT 
+ContractNumber,
+FORMAT(DateApproved, 'dd.MM.yyyy') AS Date,
+    CASE 
+	WHEN p.Name = 'A1 - 8.5%'
+		THEN 'A1'
+	WHEN p.Name = 'AXI 2-500'
+		THEN 'AXI 2'
+	WHEN p.Name = 'Visa Free ATM World'
+		THEN 'WhiteCard'
+	WHEN p.Name = 'Visa ???? ?????'
+		THEN 'WhiteCard'
+	WHEN p.Name = '???? ?????'
+		THEN 'WhiteCard'
+	WHEN p.Name = '???'
+		THEN 'WhiteCard'
+	WHEN p.Name = '180 ??? Visa ???? ?????'
+		THEN 'WhiteCard'
+	WHEN p.Name = '????? ?? ????'
+		THEN 'WhiteCard'
+	WHEN p.Name = '???? ????? ? ???? ?????'
+		THEN 'WhiteCard only interest'
+	WHEN Name = 'Visa ???? ????? - SC'
+		THEN 'WhiteCard'
+	WHEN Name = '???? ????? Gold - 5%'
+		THEN 'WhiteCard-Gold'
+	WHEN Name = '???? ????? Gold - 10%'
+		THEN 'WhiteCard-Gold'
+	WHEN Name = '???? ????? Gold-MFG-5%'
+		THEN 'WhiteCard-Gold'
+	WHEN Name = '?????? ?? ?? 3'
+		THEN 'Axi Credit 3'
+	WHEN Name = '?????? ?? ?? 4 '
+		THEN 'Axi Credit 4'
+	WHEN Name = '?????? ?? ?? 4 - paper'
+		THEN 'Axi Credit 4'
+	WHEN Name = '???? ????? 2'
+		THEN 'WhiteCard'
+ELSE p.Name
+	END AS Product,
+	COUNT(CreditCardLimit) AS ApprovedClients, 
+	SUM(CreditCardLimit) AS SumLimit
+  FROM dwh.DimOffers o
+  JOIN dwh.DimProduct p ON o.ProductSK = p.ProductSK
+  WHERE  
+		--CONVERT(DATE, DateApproved) >= DATEADD(month, DATEDIFF(month, 0, GETDATE()), 0)
+  		CONVERT(DATE, DateApproved, 4) >= @FirstOfMonth 
+	    AND CONVERT(DATE, DateApproved, 4) <= @CurrentDate
+		AND (DateRefused IS NULL OR DateRefused < DateApproved)
+		AND (DateRejected IS NULL OR DateRejected < DateApproved)
+		--AND ContractNumber = 11015848
+  GROUP BY FORMAT(DateApproved, 'dd.MM.yyyy'), p.Name, ContractNumber
+
+
+
+
+")
+    
+    start_time <- Sys.time()
+    AppCards_BG <- DBI::dbFetch(DBI::dbSendQuery(myc, AppCards_BG))
+    print(paste("Done in", round(difftime(Sys.time(), start_time,unit = "mins"),2), "minutes"))
+    
+    #Close the database connection
+    DBI::dbDisconnect(myc)
+  }
+  
+  #Activated Cards BG  
+  {myc <- DBI::dbConnect(odbc::odbc()
+                         , driver = "SQL Server"
+                         , server = "scorpio.smartitbg.int"
+                         , database = "BIsmartWCBG"
+  )
+    
+    ActivatedCards_BG <- paste0(" declare @CurrentDate date = getdate();
+declare @FirstOfMonth date = case when day(getdate())=1 then DATEADD(DAY,1,EOMONTH(@CurrentDate,-2)) else DATEADD(DAY,1,EOMONTH(@CurrentDate,-1)) end; 
+
+SELECT FORMAT(ActivationDate, 'dd.MM.yyyy') AS Date, 
+CASE 
+	WHEN p.Name = 'A1 - 8.5%'
+		THEN 'A1'
+	WHEN p.Name = 'AXI 2-500'
+		THEN 'AXI 2'
+	WHEN p.Name = 'Visa Free ATM World'
+		THEN 'WhiteCard'
+	WHEN p.Name = 'Visa ???? ?????'
+		THEN 'WhiteCard'
+	WHEN p.Name = '???? ?????'
+		THEN 'WhiteCard'
+	WHEN p.Name = '???'
+		THEN 'WhiteCard'
+	WHEN p.Name = '180 ??? Visa ???? ?????'
+		THEN 'WhiteCard'
+	WHEN p.Name = '????? ?? ????'
+		THEN 'WhiteCard'
+	WHEN p.Name = '???? ????? ? ???? ?????'
+		THEN 'WhiteCard only interest'
+	WHEN Name = 'Visa ???? ????? - SC'
+		THEN 'WhiteCard'
+	WHEN p.Name = '???? ????? Gold - 5%'
+		THEN 'WhiteCard-Gold'
+	WHEN p.Name = '???? ????? Gold - 10%'
+		THEN 'WhiteCard-Gold'
+	WHEN p.Name = '???? ????? Gold-MFG-5%'
+		THEN 'WhiteCard-Gold'
+	WHEN p.Name = '?????? ?? ?? 3'
+		THEN 'Axi Credit 3'
+	WHEN p.Name = '?????? ?? ?? 4 '
+		THEN 'Axi Credit 4'
+	WHEN p.Name = '?????? ?? ?? 4 - paper'
+		THEN 'Axi Credit 4'
+	WHEN p.Name = '???? ????? 2'
+		THEN 'WhiteCard'
+ELSE p.Name
+	END AS Product, 
+   COUNT(p.Name) AS ActivatedClients
+  FROM dwh.DimCards c
+  JOIN dwh.DimOffers o ON o.OfferSK = c.OfferSK
+  JOIN dwh.DimProduct p ON o.ProductSK = p.ProductSK
+  WHERE  --CONVERT(DATE, ActivationDate) >= DATEADD(month, DATEDIFF(month, 0, GETDATE()), 0)
+    		CONVERT(DATE, ActivationDate, 4) >= @FirstOfMonth 
+	    AND CONVERT(DATE, ActivationDate, 4) <= @CurrentDate
+  GROUP BY FORMAT(ActivationDate, 'dd.MM.yyyy'), p.Name
+
+
+
+
+")
+    
+    start_time <- Sys.time()
+    ActivatedCards_BG <- DBI::dbFetch(DBI::dbSendQuery(myc, ActivatedCards_BG))
+    print(paste("Done in", round(difftime(Sys.time(), start_time,unit = "mins"),2), "minutes"))
+    
+    #Close the database connection
+    DBI::dbDisconnect(myc)
+  }  
+  
+  #Utilliezed Amounts BG 
+  {
+    myc <- DBI::dbConnect(odbc::odbc()
+                          , driver = "SQL Server"
+                          , server = "scorpio.smartitbg.int"
+                          , database = "BIsmartWCBG"
+    )
+    
+    UtillizedAMount_BG <- paste0("declare @CurrentDate date = getdate();
+declare @FirstOfMonth date = case when day(getdate())=1 then DATEADD(DAY,1,EOMONTH(@CurrentDate,-2)) else DATEADD(DAY,1,EOMONTH(@CurrentDate,-1)) end; 
+
+ 
+ SELECT
+-- ContractNumber
+--, OfferSK,
+ CONVERT(DATE, CDate,4) AS [Date]
+,CASE 
+	WHEN Name = 'A1 - 8.5%'
+		THEN 'A1'
+	WHEN Name = 'AXI 2-500'
+		THEN 'AXI 2'
+	WHEN Name = 'Visa Free ATM World'
+		THEN 'WhiteCard'
+	WHEN Name = 'Visa ???? ?????'
+		THEN 'WhiteCard'
+	WHEN Name = '???? ?????'
+		THEN 'WhiteCard'
+	WHEN Name = '???'
+		THEN 'WhiteCard'
+	WHEN Name = '180 ??? Visa ???? ?????'
+		THEN 'WhiteCard'
+	WHEN Name = '????? ?? ????'
+		THEN 'WhiteCard'
+	WHEN Name = '???? ????? ? ???? ?????'
+		THEN 'WhiteCard only interest'
+	WHEN Name = 'Visa ???? ????? - SC'
+		THEN 'WhiteCard'
+	WHEN Name = '???? ????? Gold - 5%'
+		THEN 'WhiteCard-Gold'
+	WHEN Name = '???? ????? Gold - 10%'
+		THEN 'WhiteCard-Gold'
+	WHEN Name = '???? ????? Gold-MFG-5%'
+		THEN 'WhiteCard-Gold'
+	WHEN Name = '?????? ?? ?? 3'
+		THEN 'Axi Credit 3'
+	WHEN Name = '?????? ?? ?? 4 '
+		THEN 'Axi Credit 4'
+	WHEN Name = '?????? ?? ?? 4 - paper'
+		THEN 'Axi Credit 4'
+	WHEN Name = '???? ????? 2'
+		THEN 'WhiteCard'
+ELSE Name
+	END AS Product
+
+,CASE 
+	WHEN TransactionChanel = 'POSCASH'
+		THEN 'POS'
+	WHEN TransactionChanel = 'MANUAL'
+		THEN 'POS'
+ELSE TransactionChanel
+	END AS TransactionChanel
+
+,CASE
+	When Name in ('AXI 2', 'AXI 2-500', '???? ????? Gold - 5%', '???? ????? Gold - 10%' ) and TransactionChanel = 'ATM'
+		then SUM(ATMAmount) 
+	Else  SUM(AmountTransactionBilling * -1) 
+		END AS AmountReal
+
+, SUM(AmountTransactionBilling * -1) AS Amount
+, COUNT(AmountTransactionBilling) AS CountTransaction
+, SUM(ATMAmount) AS AxiATM
+ FROM(
+SELECT fct.OfferSK
+--	, ContractNumber
+	, fct.CDate
+	, p.Name
+	, AmountTransactionBilling
+	, TransactionDate
+	, tc.Name AS TransactionChanel,
+	 ((-AmountTransactionBilling - 1.5)/1.03) AS ATMAmount
+		   from dwh.FactCardTransactions fct
+		   JOIN dwh.DimOffers do ON do.OfferSK = fct.OfferSK
+		   JOIN DWh.DimProduct p ON p.ProductSK = do.ProductSK
+		   JOIN dwh.DimTransactionChannels tc ON tc.TransactionChannelSK = fct.TransactionChannelSK
+		   WHERE tc.Name NOT IN ('ANNUAL_TAX', 'BALANCE', 'PIN_CHANGE', 'FEE')
+		   AND ResponseCodeSK = 47
+		   AND AmountTransactionBilling < 0 
+		   --and CONVERT(DATE,fct.CDate,4) = '2022-01-28'
+		   --and fct.OfferSK = 528003
+		  -- AND ContractNumber = '808089'
+		   AND CONVERT(DATE, fct.CDate, 4) >= @FirstOfMonth 
+	       AND CONVERT(DATE, fct.CDate, 4) <= @CurrentDate
+		   ) AS Result
+		     GROUP BY Name, TransactionChanel, CONVERT(DATE, CDate,4)--, ContractNumber, OfferSK
+		   ORDER BY Date, Name
+
+ ")
+    
+    start_time <- Sys.time()
+    UtillizedAMount_BG <- DBI::dbFetch(DBI::dbSendQuery(myc, UtillizedAMount_BG))
+    print(paste("Done in", round(difftime(Sys.time(), start_time,unit = "mins"),2), "minutes"))
+    
+    #Close the database connection
+    DBI::dbDisconnect(myc)
+  }
+  
+  #Card Payments BG 
+  {
+    myc <- DBI::dbConnect(odbc::odbc()
+                          , driver = "SQL Server"
+                          , server = "scorpio.smartitbg.int"
+                          , database = "BIsmartWCBG"
+    )
+    
+    PaymentsCards_BG <- paste0("declare @CurrentDate date = getdate();
+declare @FirstOfMonth date = case when day(getdate())=1 then DATEADD(DAY,1,EOMONTH(@CurrentDate,-2)) else DATEADD(DAY,1,EOMONTH(@CurrentDate,-1)) end; 
+
+SELECT 
+--ContractNumber,
+CONVERT(DATE, CDATE) AS [Date]
+ ,CASE 
+	WHEN Product = 'A1 - 8.5%'
+		THEN 'A1'
+	WHEN Product = 'AXI 2-500'
+		THEN 'AXI 2'
+	WHEN Product = 'Visa Free ATM World'
+		THEN 'WhiteCard'
+	WHEN Product = 'Visa ???? ?????'
+		THEN 'WhiteCard'
+	WHEN Product = '???? ?????'
+		THEN 'WhiteCard'
+	WHEN Product = '???'
+		THEN 'WhiteCard'
+	WHEN Product = '180 ??? Visa ???? ?????'
+		THEN 'WhiteCard'
+	WHEN Product = '????? ?? ????'
+		THEN 'WhiteCard'
+	WHEN Product = '???? ????? ? ???? ?????'
+		THEN 'WhiteCard only interest'
+	WHEN Product = 'Visa ???? ????? - SC'
+		THEN 'WhiteCard'
+	WHEN Product = '???? ????? Gold - 5%'
+		THEN 'WhiteCard-Gold'
+	WHEN Product = '???? ????? Gold - 10%'
+		THEN 'WhiteCard-Gold'
+	WHEN Product = '???? ????? Gold-MFG-5%'
+		THEN 'WhiteCard-Gold'
+	WHEN Product = '?????? ?? ?? 3'
+		THEN 'Axi Credit 3'
+	WHEN Product = '?????? ?? ?? 4 '
+		THEN 'Axi Credit 4'
+	WHEN Product = '?????? ?? ?? 4 - paper'
+		THEN 'Axi Credit 4'
+	WHEN Product = '???? ????? 2'
+		THEN 'WhiteCard'
+ELSE Product
+	END AS Product
+,CASE 
+	WHEN Notes = '??????? ???? CiPay'
+		THEN 'Collected CiPay (amount)'
+	WHEN Notes = '??????? ???? EasyPay'
+		THEN 'Collected EasyPay (amount)'
+	WHEN Notes = '??????? ???? Epay'
+		THEN 'Collected Epay (amount)'
+	WHEN Notes = '??????? ???? FastPay'
+		THEN 'Collected FastPay (amount)'
+	WHEN Notes = '??????? ???? Vpos'
+		THEN 'Collected Vpos (amount)'
+	ELSE 'Collected others (amount)'
+END AS Notes, 
+SUM(Amount) AS Amount
+	FROM (SELECT fo.OfferSK, ContractNumber,
+	p.Name AS Product, 
+	Notes, 
+	fo.CDATE, 
+	Amount
+			FROM dwh.FactFinanceOperations fo
+			--JOIN dwh.DimCards dc ON dc.ClientSK = fo.ClientSK
+			JOIN dwh.DimPaymentPartners pp ON pp.PaymentPartnersSK = fo.PaymentPartnersSK
+			JOIN dwh.DimOffers do ON do.OfferSK = fo.OfferSK
+			JOIN dwh.DimProduct p ON p.ProductSK = do.ProductSK
+			WHERE FinOperationSK = '73' 
+			--AND CONVERT(DATE, fo.CDATE, 4) >= DATEADD(month, DATEDIFF(month, 0, GETDATE()), 0)
+		    AND CONVERT(DATE, fo.CDATE, 4) >= @FirstOfMonth 
+	        AND CONVERT(DATE, fo.CDATE, 4) <= @CurrentDate
+			AND p.Name != 'N/A'
+			--AND ActivationDate IS NOT NULL
+			--AND EasyClientNumber = 819798
+			) AS Result
+  GROUP BY Product, Notes, CONVERT(DATE, CDATE)--,ContractNumber
+  ORDER BY Date, Product
+
+
+ ")
+    
+    start_time <- Sys.time()
+    PaymentsCards_BG <- DBI::dbFetch(DBI::dbSendQuery(myc, PaymentsCards_BG))
+    print(paste("Done in", round(difftime(Sys.time(), start_time,unit = "mins"),2), "minutes"))
+    
+    #Close the database connection
+    DBI::dbDisconnect(myc)
+  }
+  
+  #Winnings/Revarsal BG 
+  {
+    myc <- DBI::dbConnect(odbc::odbc()
+                          , driver = "SQL Server"
+                          , server = "scorpio.smartitbg.int"
+                          , database = "BIsmartWCBG"
+    )
+    
+    Winnigs_Reversal_BG <- paste0("declare @CurrentDate date = getdate();
+declare @FirstOfMonth date = case when day(getdate())=1 then DATEADD(DAY,1,EOMONTH(@CurrentDate,-2)) else DATEADD(DAY,1,EOMONTH(@CurrentDate,-1)) end; 
+
+ 
+ SELECT
+-- ContractNumber
+--, OfferSK,
+ CONVERT(DATE, CDate,4) AS [Date]
+
+  ,CASE 
+	WHEN Name = 'A1 - 8.5%'
+		THEN 'A1'
+	WHEN Name = 'AXI 2-500'
+		THEN 'AXI 2'
+	WHEN Name = 'Visa Free ATM World'
+		THEN 'WhiteCard'
+	WHEN Name = 'Visa ???? ?????'
+		THEN 'WhiteCard'
+	WHEN Name = '???? ?????'
+		THEN 'WhiteCard'
+	WHEN Name = '???'
+		THEN 'WhiteCard'
+	WHEN Name = '180 ??? Visa ???? ?????'
+		THEN 'WhiteCard'
+	WHEN Name = '????? ?? ????'
+		THEN 'WhiteCard'
+	WHEN Name = '???? ????? ? ???? ?????'
+		THEN 'WhiteCard only interest'
+	WHEN Name = 'Visa ???? ????? - SC'
+		THEN 'WhiteCard'
+	WHEN Name = '???? ????? Gold - 5%'
+		THEN 'WhiteCard-Gold'
+	WHEN Name = '???? ????? Gold - 10%'
+		THEN 'WhiteCard-Gold'
+	WHEN Name = '???? ????? Gold-MFG-5%'
+		THEN 'WhiteCard-Gold'
+	WHEN Name = '?????? ?? ?? 3'
+		THEN 'Axi Credit 3'
+	WHEN Name = '?????? ?? ?? 4 '
+		THEN 'Axi Credit 4'
+	WHEN Name = '?????? ?? ?? 4 - paper'
+		THEN 'Axi Credit 4'
+	WHEN Name = '???? ????? 2'
+		THEN 'WhiteCard'
+ELSE Name
+	END AS Product
+
+--,CASE 
+--	WHEN TransactionChanel = 'POSCASH'
+--		THEN 'POS'
+--	WHEN TransactionChanel = 'MANUAL'
+--		THEN 'POS'
+--ELSE TransactionChanel
+--	END AS TransactionChanel
+--
+,CASE
+	When Name in ('AXI 2', 'AXI 2-500', '???? ????? Gold - 5%', '???? ????? Gold - 10%' ) and TransactionChanel = 'ATM'
+		then SUM(ATMAmount) 
+	Else  SUM(AmountTransactionBilling) 
+		END AS Amount
+
+,'Winning/Reversal (amount)' AS Notes
+--, SUM(AmountTransactionBilling) AS Amount
+--, COUNT(AmountTransactionBilling) AS CountTransaction
+--, SUM(ATMAmount) AS AxiATM
+ FROM(
+SELECT fct.OfferSK
+--	, ContractNumber
+	, fct.CDate
+	, p.Name
+	, AmountTransactionBilling
+	, TransactionDate
+	, tc.Name AS TransactionChanel,
+	 ((AmountTransactionBilling - 1.5)/1.03) AS ATMAmount
+		   from dwh.FactCardTransactions fct
+		   JOIN dwh.DimOffers do ON do.OfferSK = fct.OfferSK
+		   JOIN DWh.DimProduct p ON p.ProductSK = do.ProductSK
+		   JOIN dwh.DimTransactionChannels tc ON tc.TransactionChannelSK = fct.TransactionChannelSK
+		   WHERE tc.Name NOT IN ('ANNUAL_TAX', 'BALANCE', 'PIN_CHANGE', 'FEE')
+		   AND ResponseCodeSK = 47
+		   AND AmountTransactionBilling > 0 
+		   --and CONVERT(DATE,fct.CDate,4) = '2022-01-28'
+		   --and fct.OfferSK = 528003
+		  -- AND ContractNumber = '808089'
+		   AND CONVERT(DATE, fct.CDate, 4) >= @FirstOfMonth 
+	       AND CONVERT(DATE, fct.CDate, 4) <= @CurrentDate
+		   ) AS Result
+		     GROUP BY Name, TransactionChanel, CONVERT(DATE, CDate,4)--, ContractNumber, OfferSK
+		   ORDER BY Date, Name
+
+ ")
+    
+    start_time <- Sys.time()
+    Winnigs_Reversal_BG <- DBI::dbFetch(DBI::dbSendQuery(myc, Winnigs_Reversal_BG))
+    print(paste("Done in", round(difftime(Sys.time(), start_time,unit = "mins"),2), "minutes"))
+    
+    #Close the database connection
+    DBI::dbDisconnect(myc)
+  }
+  
+  #Card Charges BG 
+  {
+    myc <- DBI::dbConnect(odbc::odbc()
+                          , driver = "SQL Server"
+                          , server = "scorpio.smartitbg.int"
+                          , database = "BIsmartWCBG"
+    )
+    
+    CreditCardCharges_BG <- paste0(" declare @CurrentDate date = getdate();
+declare @FirstOfMonth date = case when day(getdate())=1 then DATEADD(DAY,1,EOMONTH(@CurrentDate,-2)) else DATEADD(DAY,1,EOMONTH(@CurrentDate,-1)) end; 
+
+SELECT CONVERT(date, ee.CDate) AS Date
+  ,CASE 
+	WHEN p.Name = 'A1 - 8.5%'
+		THEN 'A1'
+	WHEN p.Name  = 'AXI 2-500'
+		THEN 'AXI 2'
+	WHEN p.Name  = 'Visa Free ATM World'
+		THEN 'WhiteCard'
+	WHEN p.Name  = 'Visa ???? ?????'
+		THEN 'WhiteCard'
+	WHEN p.Name  = '???? ?????'
+		THEN 'WhiteCard'
+	WHEN p.Name  = '???'
+		THEN 'WhiteCard'
+	WHEN p.Name  = '180 ??? Visa ???? ?????'
+		THEN 'WhiteCard'
+	WHEN p.Name  = '????? ?? ????'
+		THEN 'WhiteCard'
+	WHEN p.Name  = '???? ????? ? ???? ?????'
+		THEN 'WhiteCard only interest'
+	WHEN p.Name  = 'Visa ???? ????? - SC'
+		THEN 'WhiteCard'
+	WHEN p.Name  = '???? ????? Gold - 5%'
+		THEN 'WhiteCard-Gold'
+	WHEN p.Name  = '???? ????? Gold - 10%'
+		THEN 'WhiteCard-Gold'
+	WHEN p.Name  = '???? ????? Gold-MFG-5%'
+		THEN 'WhiteCard-Gold'
+	WHEN p.Name  = '?????? ?? ?? 3'
+		THEN 'Axi Credit 3'
+	WHEN p.Name  = '?????? ?? ?? 4 '
+		THEN 'Axi Credit 4'
+	WHEN p.Name  = '?????? ?? ?? 4 - paper'
+		THEN 'Axi Credit 4'
+	WHEN p.Name  = '???? ????? 2'
+		THEN 'WhiteCard'
+ELSE p.Name 
+	END AS Product
+,CASE 
+	WHEN fo.Name = '??????? ????? ?? ??????'
+		THEN 'Moratory interest'
+	WHEN fo.Name = '????? ???????????'
+		THEN 'Revolving fee'
+	WHEN fo.Name = '????????? ??????? ?????'
+		THEN '?nnual fee'
+	WHEN fo.Name = '????????? ????? 1'
+		THEN 'Interest 1'
+	WHEN fo.Name = '????????? ????? 2'
+		THEN 'Interest 2'
+	WHEN fo.Name = '????????? ??????? ????? POS ?/??? online'
+		THEN 'Interest POS and/or online'
+	WHEN fo.Name = '????????? ??????? ????? ???'
+		THEN 'Interest ???'
+	WHEN fo.Name = '????????? ????? ????????'
+		THEN 'Collection tax'
+	WHEN fo.Name = '????????? ?? ????????????'
+		THEN 'Penalty for non-execution. of contractual obligations.'
+	WHEN fo.Name = '?????? ?? ????????'
+		THEN 'Collection cost'
+	WHEN fo.Name = '????? ??????? ?? ???'
+		THEN 'ATM withdraw tax'
+	WHEN fo.Name = '?????? ???????????? ????????'
+		THEN 'Collection tax'
+	WHEN fo.Name = '????????'
+		THEN 'Discount'
+ELSE fo.Name
+END AS Accural, 
+	SUM(Amount) AS Amount
+FROM
+dwh.FactExtraExpenses ee
+JOIN dwh.DimFinOperation fo ON fo.FinOperationSK = ee.FinOperationSK
+JOIN dwh.DimOffers o ON o.OfferSK = ee.OfferSK
+JOIN dwh.DimProduct p ON p.ProductSK = o.ProductSK
+WHERE --CONVERT(date, ee.CDate) >= DATEADD(month, DATEDIFF(month, 0, GETDATE()), 0)
+		    CONVERT(DATE, ee.CDate, 4) >= @FirstOfMonth 
+	        AND CONVERT(DATE, ee.CDate, 4) <= @CurrentDate
+			--AND ee.FinOperationSK IN (3, 4, 5, 6, 7, 8, 9,10,11,19,20,21,33,37,49,50,51,54)
+			AND ee.FinOperationSK IN (1,2,3,9,11,12,13,15,25,26,27,30,38,39,40,43,44,45,46,47,48,63,64,65,66,67,68,69,70,71)
+GROUP BY CONVERT(date, ee.CDate), p.Name, fo.Name
+
+
+
+ ")
+    
+    start_time <- Sys.time()
+    CreditCardCharges_BG <- DBI::dbFetch(DBI::dbSendQuery(myc, CreditCardCharges_BG))
+    print(paste("Done in", round(difftime(Sys.time(), start_time,unit = "mins"),2), "minutes"))
+    
+    #Close the database connection
+    DBI::dbDisconnect(myc)
+    
+  }  
+  
+  #Credits Charges BG 
+  {
+    myc <- DBI::dbConnect(odbc::odbc()
+                          , driver = "SQL Server"
+                          , server = "scorpio.smartitbg.int"
+                          , database = "BIsmartWCBG"
+    )
+    
+    CreditsCharges_BG <- paste0("
+declare @CurrentDate date = getdate();
+declare @FirstOfMonth date = case when day(getdate())=1 then DATEADD(DAY,1,EOMONTH(@CurrentDate,-2)) else DATEADD(DAY,1,EOMONTH(@CurrentDate,-1)) end; 
+
+SELECT --ContractNumber, 
+CONVERT(date, DueDate) As Date,
+ CASE 
+	WHEN p.Name = 'A1 Credit 1'
+		THEN 'A1 Credit'
+	WHEN p.Name = 'A1 Credit 2'
+		THEN 'A1 Credit'
+	WHEN p.Name = '?1 ????????????? ??? ??'
+		THEN 'A1 Credit'
+	WHEN p.Name = '?1 ????????????? ??'
+		THEN 'A1 Credit'
+	WHEN p.Name = 'Axi Credit 2'
+		THEN 'Axi Credit'
+	WHEN p.Name = 'Axi Credit 3'
+		THEN 'Axi Credit'
+	WHEN p.Name = 'Axi Credit 4'
+		THEN 'Axi Credit'
+	WHEN p.Name = 'Axi Credit 4 - paper'
+		THEN 'Axi Credit'
+	WHEN p.Name = '?????? ?? ?? 4 '
+		THEN 'Axi Credit'
+	WHEN p.Name = '?????? ?? ?? 4 - paper'
+		THEN 'Axi Credit'
+	WHEN p.Name = '?1 ????????????? ?? 2'
+		THEN 'A1 Credit'
+	WHEN p.Name = '?????? ?? ?? 3'
+		THEN 'Axi Credit'
+	ELSE p.Name
+		END AS Product,
+CASE 
+	WHEN a.Name = '?????'
+		THEN 'Interest'
+	WHEN a.Name = '??????? ?????'
+		THEN 'Moratory interest'
+	WHEN a.Name = '????????? ?????????'
+		THEN 'Penalty guarantor'
+	WHEN a.Name = '?????????????? ?? ??????'
+		THEN 'Penalty guarantor'
+	WHEN a.Name = '?????? ???????? 1'
+		THEN 'Collection cost'		
+	WHEN a.Name = '?????? ???????? 2'
+		THEN 'Collection cost'	
+	WHEN a.Name = '?????? ???????? 4'
+		THEN 'Collection cost'	
+	WHEN a.Name = '?????? ???????? 8'
+		THEN 'Collection cost'	
+	ELSE a.Name 
+	END AS Accural,
+SUM(AccrualValue) AS Amount
+  FROM dwh.FactCreditAccrual ca
+  JOIN dwh.DimCreditSC csc ON csc.CreditSCSK = ca.CreditSCSK
+  JOIN dwh.DimOffers o ON o.OfferSK = csc.OfferSK
+  JOIN dwh.DimProduct p ON p.ProductSK = o.ProductSK
+  JOIN dwh.DimAccrual a ON a.AccrualSK = ca.AccrualSK
+  WHERE --CONVERT(DATE, ca.DueDate,4) between DATEADD(mm, DATEDIFF(mm, 0, GETDATE()), 0) AND DATEADD(day, -1, CAST(GETDATE() AS date))
+      CONVERT(DATE, ca.DueDate, 4) >= @FirstOfMonth 
+  AND CONVERT(DATE, ca.DueDate, 4) <= @CurrentDate
+  AND ProductID IN (11,12,15,16,20,23,28,29,32,33,34,35,36)
+  AND ca.AccrualSK IN (20,21,22,23,6,11,31,19) --??????????
+  AND coalesce(CancellationDate, convert(date, '9999-12-01')) > DATEADD(day, -1, CAST(GETDATE() AS date)) 
+  AND IsReversed = 0
+  Group by --ContractNumber, 
+  CONVERT(date, DueDate),
+   p.Name,a.Name  
+
+
+ ")
+    
+    start_time <- Sys.time()
+    CreditsCharges_BG <- DBI::dbFetch(DBI::dbSendQuery(myc, CreditsCharges_BG))
+    print(paste("Done in", round(difftime(Sys.time(), start_time,unit = "mins"),2), "minutes"))
+    
+    #Close the database connection
+    DBI::dbDisconnect(myc)
+    
+  }
+  
+  #Closed Cards BG
+  {
+    myc <- DBI::dbConnect(odbc::odbc()
+                          , driver = "SQL Server"
+                          , server = "scorpio.smartitbg.int"
+                          , database = "BIsmartWCBG"
+    )
+    
+    ClosedCards_BG <- paste0(" 		
+declare @CurrentDate date = getdate();
+declare @FirstOfMonth date = case when day(getdate())=1 then DATEADD(DAY,1,EOMONTH(@CurrentDate,-2)) else DATEADD(DAY,1,EOMONTH(@CurrentDate,-1)) end; 
+
+SELECT  CONVERT(DATE,ClosureDate) AS Date
+  ,CASE 
+	WHEN Product = 'A1 - 8.5%'
+		THEN 'A1'
+	WHEN Product  = 'AXI 2-500'
+		THEN 'AXI 2'
+	WHEN Product  = 'Visa Free ATM World'
+		THEN 'WhiteCard'
+	WHEN Product  = 'Visa ???? ?????'
+		THEN 'WhiteCard'
+	WHEN Product  = '???? ?????'
+		THEN 'WhiteCard'
+	WHEN Product  = '???'
+		THEN 'WhiteCard'
+	WHEN Product  = '180 ??? Visa ???? ?????'
+		THEN 'WhiteCard'
+	WHEN Product  = '????? ?? ????'
+		THEN 'WhiteCard'
+	WHEN Product  = '???? ????? ? ???? ?????'
+		THEN 'WhiteCard only interest'
+	WHEN Product  = 'Visa ???? ????? - SC'
+		THEN 'WhiteCard'
+	WHEN Product  = '???? ????? Gold - 5%'
+		THEN 'WhiteCard-Gold'
+	WHEN Product = '???? ????? Gold - 10%'
+		THEN 'WhiteCard-Gold'
+	WHEN Product  = '???? ????? Gold-MFG-5%'
+		THEN 'WhiteCard-Gold'
+	WHEN Product  = '?????? ?? ?? 3'
+		THEN 'Axi Credit 3'
+	WHEN Product = '?????? ?? ?? 4 '
+		THEN 'Axi Credit 4'
+	WHEN Product  = '?????? ?? ?? 4 - paper'
+		THEN 'Axi Credit 4'
+	WHEN Product  = '???? ????? 2'
+		THEN 'WhiteCard'
+ELSE Product
+	END AS Product,
+CASE
+	WHEN CloseReason = '??????? ??? ??????'
+		THEN 'Closed cards'
+	WHEN CloseReason = '???????? ?? ??????????'
+		THEN 'Closed cards'
+	WHEN CloseReason = '?????'
+		THEN 'Cession'
+	ELSE CloseReason
+END AS CloseReason, 
+	COUNT(EasyClientNumber) AS Count
+		FROM
+	(SELECT DISTINCT p.Name AS Product, 
+	o.LDate AS ClosureDate, 
+	Code AS CloseReason, 
+	c.EasyClientNumber
+	  FROM dwh.DimOffers o
+	  JOIN dwh.DimOfferHist oh ON oh.OfferSK = o.OfferSK
+	  JOIN dwh.DimCards c ON c.OfferSK = o.OfferSK
+	  JOIN dwh.DimProduct p ON p.ProductSK = o.ProductSK
+	  JOIN dwh.DimOffCloseReason cr ON cr.CloseReasonSK = o.CloseReasonSK
+	  WHERE --CONVERT(date, o.DateClosed) >=  DATEADD(month, DATEDIFF(month, 0, GETDATE()), 0)
+	          CONVERT(DATE, o.DateClosed, 4) >= @FirstOfMonth 
+		  AND CONVERT(DATE, o.DateClosed, 4) <= @CurrentDate
+		  AND Latest = '1'  
+		  AND p.Name != 'N/A') 
+	  AS Result
+	  GROUP BY Product,  CONVERT(DATE,ClosureDate), CloseReason
+
+
+
+
+ ")
+    
+    start_time <- Sys.time()
+    ClosedCards_BG <- DBI::dbFetch(DBI::dbSendQuery(myc, ClosedCards_BG))
+    print(paste("Done in", round(difftime(Sys.time(), start_time,unit = "mins"),2), "minutes"))
+    
+    #Close the database connection
+    DBI::dbDisconnect(myc)
+  }  
+  
+  #Utilliezd Credits BG
+  {
+    myc <- DBI::dbConnect(odbc::odbc()
+                          , driver = "SQL Server"
+                          , server = "scorpio.smartitbg.int"
+                          , database = "BIsmartWCBG"
+    )
+    
+    UtilliezdCredits_BG <- paste0(" 
+declare @CurrentDate date = getdate();
+declare @FirstOfMonth date = case when day(getdate())=1 then DATEADD(DAY,1,EOMONTH(@CurrentDate,-2)) else DATEADD(DAY,1,EOMONTH(@CurrentDate,-1)) end; 
+ 
+ SELECT CONVERT(DATE, UtilizationDate) AS Date, 
+ --ContractNumber,
+  CASE
+	WHEN p.Name = 'Axi Credit 4 - paper'
+		THEN 'Axi Credit 4'
+WHEN p.Name = '?????? ?? ?? 4 '
+		THEN 'Axi Credit 4'
+	WHEN p.Name = '?????? ?? ?? 3'
+		THEN 'Axi Credit 3'
+	WHEN p.Name = '?????? ?? ?? 4 - paper'
+		THEN 'Axi Credit 4'
+	WHEN p.Name = '?1 ????????????? ?? 2'
+		THEN '?1 ????????????? ??'
+	ELSE  p.Name 
+  END AS Product,
+ SUM(LimitSC) AS Limit, 
+ COUNT(ContractNumber) AS Count
+  FROM dwh.DimCreditSC csc  
+  join dwh.DimOffers o ON o.OfferSK = csc.OfferSK
+  join dwh.DimProduct p ON p.ProductSK = o.ProductSK
+  join dwh.DimCreditStatus cs ON cs.CreditStatusSK = csc.SCreditStatusSK
+	WHERE p.ProductID IN (11,12,15,16,20,23,28,29,32,33,34,35,36)
+	--AND CONVERT(DATE, UtilizationDate) >= DATEADD(month, DATEDIFF(month, 0, GETDATE()), 0)
+    AND CONVERT(DATE, UtilizationDate, 4) >= @FirstOfMonth 
+    AND CONVERT(DATE, UtilizationDate, 4) <= @CurrentDate
+	AND cs.Name != 'Deleted'
+  GROUP BY CONVERT(DATE, UtilizationDate), p.Name-- , ContractNumber
+
+ ")
+    
+    start_time <- Sys.time()
+    UtilliezdCredits_BG <- DBI::dbFetch(DBI::dbSendQuery(myc, UtilliezdCredits_BG))
+    print(paste("Done in", round(difftime(Sys.time(), start_time,unit = "mins"),2), "minutes"))
+    
+    #Close the database connection
+    DBI::dbDisconnect(myc)
+    
+  }
+  
+  #Credits Payments BG
+  {
+    myc <- DBI::dbConnect(odbc::odbc()
+                          , driver = "SQL Server"
+                          , server = "scorpio.smartitbg.int"
+                          , database = "BIsmartWCBG"
+    )
+    
+    CreditPayments_BG <- paste0("declare @CurrentDate date = getdate();
+declare @FirstOfMonth date = case when day(getdate())=1 then DATEADD(DAY,1,EOMONTH(@CurrentDate,-2)) else DATEADD(DAY,1,EOMONTH(@CurrentDate,-1)) end; 
+
+With Payments as
+(
+Select * from
+(
+SELECT
+ContractNumber,
+CONVERT(date, fo.OperationDate) AS Date, 
+CASE
+WHEN p.Name = 'Axi Credit 4 - paper'
+	THEN 'Axi Credit 4'
+WHEN p.Name = '?????? ?? ?? 4 - paper'
+	THEN 'Axi Credit 4'
+WHEN p.Name = '?????? ?? ?? 4'
+	THEN 'Axi Credit 4'
+WHEN p.Name = '?????? ?? ?? 3'
+	THEN 'Axi Credit 3'
+WHEN p.Name = '?1 ????????????? ?? 2'
+	THEN '?1 ????????????? ??'
+ELSE  p.Name 
+ END AS Product,
+
+SUM(PayAmt) as Amount,
+
+ROW_NUMBER() OVER (Partition by CreditPaymentID ORDER BY OperationDate desc) as rownum -- remove dup payments
+
+--CASE 
+--     WHEN fo.ReversalDate IS NOT NULL
+--		THEN SUM(PayAmt * -1)
+--	ELSE SUM(PayAmt)
+--END AS AmountRevarsal
+
+  FROM dwh.FactCreditPayment fo
+  JOIN dwh.DimCreditSC csc ON csc.CreditSCSK = fo.CreditSCSK
+  JOIN dwh.DimOffers o ON o.OfferSK = csc.OfferSK
+  JOIN dwh.DimProduct p ON p.ProductSK = o.ProductSK
+  WHERE CONVERT(DATE, fo.OperationDate, 4) >= @FirstOfMonth 
+  AND CONVERT(DATE, fo.OperationDate, 4) <= @CurrentDate 
+  AND p.ProductID IN (11,12,15,16,20,23,28,29,32,33,34,35,36) 
+  and fo.ExternalId not like '%.%'
+  and convert(date, coalesce(fo.ReversalDate, '9999-12-31')) > @FirstOfMonth
+  and RepaymentTypeSK IN (3,6,7,11)
+  --and ContractNumber = 964547
+  GROUP BY CONVERT(DATE, fo.OperationDate), p.Name, ContractNumber, CreditPaymentID,OperationDate ) as Result
+  where rownum = 1
+  ),
+
+Reversal As
+(
+Select * from
+(
+SELECT
+ContractNumber,
+CONVERT(date, fo.ReversalDate) AS Date, 
+CASE
+WHEN p.Name = 'Axi Credit 4 - paper'
+	THEN 'Axi Credit 4'
+WHEN p.Name = '?????? ?? ?? 4 - paper'
+	THEN 'Axi Credit 4'
+WHEN p.Name = '?????? ?? ?? 4'
+	THEN 'Axi Credit 4'
+WHEN p.Name = '?????? ?? ?? 3'
+	THEN 'Axi Credit 3'
+WHEN p.Name = '?1 ????????????? ?? 2'
+	THEN '?1 ????????????? ??'
+ELSE  p.Name 
+ END AS Product,
+
+SUM(PayAmt * -1) as Amount,
+
+ROW_NUMBER() OVER (Partition by CreditPaymentID ORDER BY OperationDate desc) as rownum -- remove dup payments
+
+--CASE 
+--     WHEN fo.ReversalDate IS NOT NULL
+--		THEN SUM(PayAmt * -1)
+--	ELSE SUM(PayAmt)
+--END AS AmountRevarsal
+
+  FROM dwh.FactCreditPayment fo
+  JOIN dwh.DimCreditSC csc ON csc.CreditSCSK = fo.CreditSCSK
+  JOIN dwh.DimOffers o ON o.OfferSK = csc.OfferSK
+  JOIN dwh.DimProduct p ON p.ProductSK = o.ProductSK
+  WHERE CONVERT(DATE, fo.ReversalDate,4)  >= @FirstOfMonth
+  AND CONVERT(DATE, fo.ReversalDate,4)  <= @CurrentDate
+  AND p.ProductID IN (11,12,15,16,20,23,28,29,32,33,34,35,36) 
+  and fo.ExternalId not like '%.%'
+  --and convert(date, coalesce(fo.ReversalDate, '9999-12-31')) > @FirstOfMonth
+  and RepaymentTypeSK IN (3,6,7,11)
+  --and ContractNumber = 964547
+  GROUP BY CONVERT(DATE, fo.ReversalDate), p.Name, ContractNumber , CreditPaymentID,OperationDate 
+  ) as Result
+  where rownum = 1
+  )
+
+
+  Select * 
+  from Payments p 
+  Union All
+  select *
+  from Reversal r
+
+
+ 
+
+ ")
+
+start_time <- Sys.time()
+CreditPayments_BG <- DBI::dbFetch(DBI::dbSendQuery(myc, CreditPayments_BG))
+print(paste("Done in", round(difftime(Sys.time(), start_time,unit = "mins"),2), "minutes"))
+
+#Close the database connection
+DBI::dbDisconnect(myc)
+
+  }
+  
+  #Credit Base
+  {
+    myc <- DBI::dbConnect(odbc::odbc()
+                          , driver = "SQL Server"
+                          , server = "scorpio.smartitbg.int"
+                          , database = "BIsmartWCBG"
+    )
+    
+    CreditBase <- paste0("  
+SELECT ContractNumber, Product, Status, CONVERT(Date,GETDATE()-1) AS Date
+FROM
+(
+select Distinct ContractNumber
+ ,CASE
+	WHEN p.Name = 'Axi Credit 4 - paper'
+		THEN 'Axi Credit 4'
+	WHEN p.Name = '?????? ?? ?? 4 - paper'
+		THEN 'Axi Credit 4'
+	WHEN p.Name = '?????? ?? ?? 4'
+		THEN 'Axi Credit 4'
+	WHEN p.Name = '?????? ?? ?? 3'
+		THEN 'Axi Credit 3'
+	WHEN p.Name = '?1 ????????????? ?? 2'
+		THEN '?1 ????????????? ??'
+	ELSE  p.Name 
+  END AS Product,
+CASE 
+	WHEN s.Name = 'Active'
+		THEN 'Active loans'
+	WHEN s.Name = 'Completed'
+		THEN 'Repaid loans'
+	WHEN s.Name = 'Deleted'
+		THEN 'Repaid loans'
+	ELSE s.Name
+END AS Status,
+row_number() over(partition by ContractNumber order by AdditionalCreditStatusLastModified desc) as rn
+from dwh.DimCreditSC csc
+join dwh.DimOffers o ON o.OfferSK = csc.OfferSK
+join dwh.DimProduct p ON p.ProductSK = o.ProductSK
+left join dwh.DimCreditStatus s ON s.CreditStatusSK = csc.SCreditStatusSK
+Where p.ProductID IN (11,12,15,16,20,23,28,29) 
+) AS Result
+where rn = 1
+
+
+
+ ")
+                         
+                         start_time <- Sys.time()
+                         CreditBase <- DBI::dbFetch(DBI::dbSendQuery(myc, CreditBase))
+                         print(paste("Done in", round(difftime(Sys.time(), start_time,unit = "mins"),2), "minutes"))
+                         
+                         #Close the database connection
+                         DBI::dbDisconnect(myc)
+                         
+  }  
+  
+}
+
+# Poland Queries Load!
+{
+  # Approved Clients PL  
+  {  
+    # Approved_PL_WPC
+    {  
+      
+      myc <- DBI::dbConnect(odbc::odbc()
+                            , driver = "SQL Server"
+                            , server = "scorpio.smartitbg.int"
+                            , database = "BIsmartWCPL"
+      )
+      
+      AppCards_PL_WPC <- paste0("declare @CurrentDate date = getdate();
+declare @FirstOfMonth date = case when day(getdate())=1 then DATEADD(DAY,1,EOMONTH(@CurrentDate,-2)) else DATEADD(DAY,1,EOMONTH(@CurrentDate,-1)) end; 
+
+SELECT FORMAT(DateApproved, 'dd.MM.yyyy') AS Date, --Taking approved whitout proposal change
+ CASE 
+WHEN p.Name = 'Axi Card PL'
+	THEN 'AXI PL'
+WHEN p.Name = 'Axi Card PL 2'
+	THEN 'AXI PL'
+WHEN p.Name = 'Axi Card PL 3 ST'
+	THEN 'AXI PL'
+ELSE p.Name
+END AS Product, 
+ COUNT(CreditCardLimit) AS ApprovedClients,
+ SUM(CreditCardLimit) AS SumLimit
+  FROM dwh.DimOffers o
+  JOIN dwh.DimProduct p ON o.ProductSK = p.ProductSK
+   WHERE  --CONVERT(DATE, DateApproved) >= DATEADD(month, DATEDIFF(month, 0, GETDATE()), 0)
+          CONVERT(DATE, DateApproved, 4) >= @FirstOfMonth 
+	  AND CONVERT(DATE, DateApproved, 4) <= @CurrentDate
+	  AND DateRefused IS NULL
+	  AND DateRejected IS NULL
+  GROUP BY FORMAT(DateApproved, 'dd.MM.yyyy'), p.Name
+  ORDER BY Date
+")
+      
+      start_time <- Sys.time()
+      AppCards_PL_WPC <- DBI::dbFetch(DBI::dbSendQuery(myc, AppCards_PL_WPC))
+      print(paste("Done in", round(difftime(Sys.time(), start_time,unit = "mins"),2), "minutes"))
+      
+      #Close the database connection
+      DBI::dbDisconnect(myc)
+    }
+    
+    # Approved_PL_DeniedApproved
+    {  
+      
+      myc <- DBI::dbConnect(odbc::odbc()
+                            , driver = "SQL Server"
+                            , server = "scorpio.smartitbg.int"
+                            , database = "BIsmartWCPL"
+      )
+      
+      AppCards_PL_DA <- paste0("    declare @CurrentDate date = getdate();
+declare @FirstOfMonth date = case when day(getdate())=1 then DATEADD(DAY,1,EOMONTH(@CurrentDate,-2)) else DATEADD(DAY,1,EOMONTH(@CurrentDate,-1)) end; 
+
+SELECT FORMAT(DateApproved, 'dd.MM.yyyy') AS Date_DA, --Taking approved proposal change denied to approved
+  CASE 
+	WHEN p.Name = 'Axi Card PL'
+	THEN 'AXI PL'
+	WHEN p.Name = 'Axi Card PL 2'
+	THEN 'AXI PL'
+	WHEN p.Name = 'Axi Card PL 3 ST'
+	THEN 'AXI PL'
+ELSE p.Name
+END AS Product_DA, 
+ COUNT(CreditCardLimit) AS ApprovedClients_DA,
+ SUM(CreditCardLimit) AS SumLimit_DA
+  FROM dwh.DimOffers o
+  JOIN dwh.DimProduct p ON o.ProductSK = p.ProductSK
+  WHERE --CONVERT(DATE, DateApproved) >= DATEADD(month, DATEDIFF(month, 0, GETDATE()), 0)
+		  CONVERT(DATE, DateApproved, 4) >= @FirstOfMonth 
+	  AND CONVERT(DATE, DateApproved, 4) <= @CurrentDate
+	  AND DateRefused < DateApproved
+  GROUP BY FORMAT(DateApproved, 'dd.MM.yyyy'), p.Name
+  ORDER BY Date_DA
+")
+      
+      start_time <- Sys.time()
+      AppCards_PL_DA <- DBI::dbFetch(DBI::dbSendQuery(myc, AppCards_PL_DA))
+      print(paste("Done in", round(difftime(Sys.time(), start_time,unit = "mins"),2), "minutes"))
+      
+      #Close the database connection
+      DBI::dbDisconnect(myc)
+    }
+    
+    # Approved_PL_RejectedApproved
+    {  
+      
+      myc <- DBI::dbConnect(odbc::odbc()
+                            , driver = "SQL Server"
+                            , server = "scorpio.smartitbg.int"
+                            , database = "BIsmartWCPL"
+      )
+      
+      AppCards_PL_RA <- paste0("     declare @CurrentDate date = getdate();
+declare @FirstOfMonth date = case when day(getdate())=1 then DATEADD(DAY,1,EOMONTH(@CurrentDate,-2)) else DATEADD(DAY,1,EOMONTH(@CurrentDate,-1)) end; 
+
+SELECT FORMAT(DateApproved, 'dd.MM.yyyy') AS Date_RA, --Taking approved proposal change rejected to approved
+  CASE 
+	WHEN p.Name = 'Axi Card PL'
+	THEN 'AXI PL'
+	WHEN p.Name = 'Axi Card PL 2'
+	THEN 'AXI PL'
+	WHEN p.Name = 'Axi Card PL 3 ST'
+	THEN 'AXI PL'
+ELSE p.Name
+END AS Product_RA, 
+ COUNT(CreditCardLimit) AS ApprovedClients_RA,
+ SUM(CreditCardLimit) AS SumLimit_RA
+  FROM dwh.DimOffers o
+  JOIN dwh.DimProduct p ON o.ProductSK = p.ProductSK
+  WHERE --CONVERT(DATE, DateApproved) >= DATEADD(month, DATEDIFF(month, 0, GETDATE()), 0)
+		  CONVERT(DATE, DateApproved, 4) >= @FirstOfMonth 
+	  AND CONVERT(DATE, DateApproved, 4) <= @CurrentDate
+	  AND DateRejected < DateApproved
+  GROUP BY FORMAT(DateApproved, 'dd.MM.yyyy'), p.Name
+  ORDER BY Date_RA
+
+")
+      
+      start_time <- Sys.time()
+      AppCards_PL_RA <- DBI::dbFetch(DBI::dbSendQuery(myc, AppCards_PL_RA))
+      print(paste("Done in", round(difftime(Sys.time(), start_time,unit = "mins"),2), "minutes"))
+      
+      #Close the database connection
+      DBI::dbDisconnect(myc)
+    }    
+    
+  }
+  
+  # Activated Cards PL  
+  {myc <- DBI::dbConnect(odbc::odbc()
+                         , driver = "SQL Server"
+                         , server = "scorpio.smartitbg.int"
+                         , database = "BIsmartWCPL"
+  )
+    
+    ActivatedCards_PL <- paste0("    declare @CurrentDate date = getdate();
+declare @FirstOfMonth date = case when day(getdate())=1 then DATEADD(DAY,1,EOMONTH(@CurrentDate,-2)) else DATEADD(DAY,1,EOMONTH(@CurrentDate,-1)) end; 
+
+ SELECT FORMAT(ActivationDate, 'dd.MM.yyyy') AS Date, 
+     CASE 
+	WHEN p.Name = 'Axi Card PL'
+	THEN 'AXI PL'
+	WHEN p.Name = 'Axi Card PL 2'
+	THEN 'AXI PL'
+	WHEN p.Name = 'Axi Card PL 3 ST'
+	THEN 'AXI PL'
+ELSE p.Name
+END AS Product, 
+   COUNT(p.Name) AS ActivatedClients,
+   SUM(CreditCardLimit) AS ActivatedLimit
+  FROM dwh.DimCards c
+  JOIN dwh.DimOffers o ON o.OfferSK = c.OfferSK
+  JOIN dwh.DimProduct p ON o.ProductSK = p.ProductSK
+  WHERE --CONVERT(DATE, ActivationDate) >= DATEADD(month, DATEDIFF(month, 0, GETDATE()), 0)
+  		  CONVERT(DATE, ActivationDate, 4) >= @FirstOfMonth 
+	  AND CONVERT(DATE, ActivationDate, 4) <= @CurrentDate
+  GROUP BY FORMAT(ActivationDate, 'dd.MM.yyyy'), p.Name
+
+
+")
+    
+    start_time <- Sys.time()
+    ActivatedCards_PL <- DBI::dbFetch(DBI::dbSendQuery(myc, ActivatedCards_PL))
+    print(paste("Done in", round(difftime(Sys.time(), start_time,unit = "mins"),2), "minutes"))
+    
+    #Close the database connection
+    DBI::dbDisconnect(myc)
+  }
+  
+  #Utilliezed Amounts PL
+  {
+    myc <- DBI::dbConnect(odbc::odbc()
+                          , driver = "SQL Server"
+                          , server = "scorpio.smartitbg.int"
+                          , database = "BIsmartWCPL"
+    )
+    
+    UtillizedAMount_PL <- paste0("  declare @CurrentDate date = getdate();
+declare @FirstOfMonth date = case when day(getdate())=1 then DATEADD(DAY,1,EOMONTH(@CurrentDate,-2)) else DATEADD(DAY,1,EOMONTH(@CurrentDate,-1)) end; 
+
+SELECT --EasyClientNumber,
+CONVERT(date, CDate) AS Date ,Product, TransactionChanel
+, SUM(AmountTransactionBilling * -1) AS Amount,
+COUNT(AmountTransactionBilling) AS CountTransaction
+FROM(
+SELECT --DISTINCT 
+--EasyClientNumber,  
+CONVERT(Date,fct.CDate) AS CDate
+, Case 
+	WHEN tc.Name = 'POSCASH'
+		THEN 'POS'
+	ELSE tc.Name
+		END AS TransactionChanel
+, CASE 
+	WHEN p.Name = 'Axi Card PL'
+	THEN 'AXI PL'
+	WHEN p.Name = 'Axi Card PL 2'
+	THEN 'AXI PL'
+	WHEN p.Name = 'Axi Card PL 3 ST'
+	THEN 'AXI PL'
+ELSE p.Name
+END AS Product, AmountTransactionBilling, Description
+		   FROM dwh.FactCardTransactions fct
+		   --JOIN dwh.DimCards c ON c.OfferSK = fct.OfferSK
+		   JOIN dwh.DimOffers do ON do.OfferSK = fct.OfferSK
+		   JOIN DWh.DimProduct p ON p.ProductSK = do.ProductSK
+		   JOIN dwh.DimTransactionChannels tc ON tc.TransactionChannelSK = fct.TransactionChannelSK
+		   WHERE tc.Name NOT IN ('BALANCE', 'PIN_CHANGE') 
+		   --AND CONVERT(date, fct.CDate) >= DATEADD(month, DATEDIFF(month, 0, GETDATE()), 0)
+		   AND  CONVERT(DATE, fct.CDate, 4) >= @FirstOfMonth 
+	       AND CONVERT(DATE, fct.CDate, 4) <= @CurrentDate
+		   AND AmountTransactionBilling < 0 
+		   AND ResponseCodeSK = 1
+		   --AND EasyClientNumber = 100110
+		  )AS Result
+		   GROUP BY  CONVERT(date, CDate), Product, TransactionChanel--, EasyClientNumber
+		   --Remove DimCards Becouse it's duplicates some of the transaction
+
+
+
+
+ ")
+    
+    start_time <- Sys.time()
+    UtillizedAMount_PL <- DBI::dbFetch(DBI::dbSendQuery(myc, UtillizedAMount_PL))
+    print(paste("Done in", round(difftime(Sys.time(), start_time,unit = "mins"),2), "minutes"))
+    
+    #Close the database connection
+    DBI::dbDisconnect(myc)
+  }
+  
+  #Card Payments PL
+  {
+    myc <- DBI::dbConnect(odbc::odbc()
+                          , driver = "SQL Server"
+                          , server = "scorpio.smartitbg.int"
+                          , database = "BIsmartWCPL"
+    )
+    
+    PaymentsCards_PL <- paste0("declare @CurrentDate date = getdate();
+declare @FirstOfMonth date = case when day(getdate())=1 then DATEADD(DAY,1,EOMONTH(@CurrentDate,-2)) else DATEADD(DAY,1,EOMONTH(@CurrentDate,-1)) end; 
+
+SELECT --EasyClientNumber,
+CONVERT(DATE, CDATE) AS [Date], 
+ Product,   
+SUM(Amount) AS Amount,
+--'Collected' As Notes
+CASE WHEN Partner = 'N/A' THEN 'Vpos'
+	 WHEN Partner = 'ICard Bank' THEN 'Vpos'
+	 WHEN Partner = '?????????? ?? ?????? ???' THEN 'BNP'
+ELSE Partner END AS Notes
+--Partner
+	FROM (SELECT 
+	EasyClientNumber,
+	CASE WHEN p.Name = 'Axi Card PL' THEN 'AXI PL'
+		   WHEN p.Name = 'Axi Card PL 2' THEN 'AXI PL'
+       WHEN p.Name = 'Axi Card PL 3 ST' THEN 'AXI PL'
+	ELSE p.Name
+	END AS Product, 
+
+	Notes, 
+	fo.CDATE, 
+	Amount,
+	pp.Name AS Partner,
+	--RANK() OVER(PARTITION BY EasyClientNumber  
+     --                           ORDER BY MaskedPan ASC) AS tr,
+	RANK() OVER(PARTITION BY EasyClientNumber  
+                                ORDER BY ActivationDate DESC) AS tr2
+			FROM dwh.FactFinanceOperations fo
+			JOIN dwh.DimCards dc ON dc.OfferSK = fo.OfferSK
+			JOIN dwh.DimPaymentPartners pp ON pp.PaymentPartnersSK = fo.PaymentPartnersSK
+			JOIN dwh.DimOffers do ON do.OfferSK = dc.OfferSK
+			JOIN dwh.DimProduct p ON p.ProductSK = do.ProductSK
+			WHERE FinOperationSK = '1' 
+			--AND CONVERT(DATE, fo.CDATE, 4) >= DATEADD(month, DATEDIFF(month, 0, GETDATE()), 0)
+		    AND CONVERT(DATE, fo.CDATE, 4) >= @FirstOfMonth 
+	        AND CONVERT(DATE, fo.CDATE, 4) <= @CurrentDate
+			AND ActivationDate IS NOT NULL
+			--AND EasyClientNumber = 100917
+			) AS Result
+			where tr2 = 1 --tr = 1 		
+  GROUP BY Product,CONVERT(DATE, CDATE), Partner
+  --, EasyClientNumber
+  ORDER BY Date, Product
+ ")
+    
+    start_time <- Sys.time()
+    PaymentsCards_PL <- DBI::dbFetch(DBI::dbSendQuery(myc, PaymentsCards_PL))
+    print(paste("Done in", round(difftime(Sys.time(), start_time,unit = "mins"),2), "minutes"))
+    
+    #Close the database connection
+    DBI::dbDisconnect(myc)
+  }
+  
+  #Winnings/Reversal_PL
+  {
+    
+    myc <- DBI::dbConnect(odbc::odbc()
+                          , driver = "SQL Server"
+                          , server = "scorpio.smartitbg.int"
+                          , database = "BIsmartWCPL"
+    )
+    
+    Winnigs_Reversal_PL <- paste0(" declare @CurrentDate date = getdate();
+declare @FirstOfMonth date = case when day(getdate())=1 then DATEADD(DAY,1,EOMONTH(@CurrentDate,-2)) else DATEADD(DAY,1,EOMONTH(@CurrentDate,-1)) end; 
+
+SELECT CONVERT(date, CDate) AS Date ,Product, 
+'Winnigs/Reversal' As Notes,
+SUM(AmountTransactionBilling) AS Amount
+--COUNT(AmountTransactionBilling) AS CountTransaction
+FROM(
+SELECT DISTINCT EasyClientNumber,  fct.CDate
+--, Case 
+--	WHEN tc.Name = 'POSCASH'
+--		THEN 'POS'
+--	ELSE tc.Name
+--		END AS TransactionChanel
+, CASE 
+	WHEN p.Name = 'Axi Card PL'
+	THEN 'AXI PL'
+	WHEN p.Name = 'Axi Card PL 2'
+	THEN 'AXI PL'
+	WHEN p.Name = 'Axi Card PL 3 ST'
+	THEN 'AXI PL'
+ELSE p.Name
+END AS Product, AmountTransactionBilling, Description
+		   FROM dwh.FactCardTransactions fct
+		   JOIN dwh.DimCards c ON c.OfferSK = fct.OfferSK
+		   JOIN dwh.DimOffers do ON do.OfferSK = fct.OfferSK
+		   JOIN DWh.DimProduct p ON p.ProductSK = do.ProductSK
+		   JOIN dwh.DimTransactionChannels tc ON tc.TransactionChannelSK = fct.TransactionChannelSK
+		   WHERE tc.Name NOT IN ('BALANCE', 'PIN_CHANGE') 
+		   --AND CONVERT(date, fct.CDate) >= DATEADD(month, DATEDIFF(month, 0, GETDATE()), 0)
+		   AND  CONVERT(DATE, fct.CDate, 4) >= @FirstOfMonth 
+	       AND CONVERT(DATE, fct.CDate, 4) <= @CurrentDate
+		   AND AmountTransactionBilling > 0 
+		   AND ResponseCodeSK = 1
+		  )AS Result
+		   GROUP BY  CONVERT(date, CDate), Product
+
+
+
+ ")
+    
+    start_time <- Sys.time()
+    Winnigs_Reversal_PL <- DBI::dbFetch(DBI::dbSendQuery(myc, Winnigs_Reversal_PL))
+    print(paste("Done in", round(difftime(Sys.time(), start_time,unit = "mins"),2), "minutes"))
+    
+    #Close the database connection
+    DBI::dbDisconnect(myc)
+  }
+  
+  #Card Charges PL 
+  {
+    myc <- DBI::dbConnect(odbc::odbc()
+                          , driver = "SQL Server"
+                          , server = "scorpio.smartitbg.int"
+                          , database = "BIsmartWCPL"
+    )
+    
+    CreditCardCharges_PL <- paste0(" 	declare @CurrentDate date = getdate();
+declare @FirstOfMonth date = case when day(getdate())=1 then DATEADD(DAY,1,EOMONTH(@CurrentDate,-2)) else DATEADD(DAY,1,EOMONTH(@CurrentDate,-1)) end; 
+
+SELECT CONVERT(date, ee.CDate) AS Date, 
+--o.OfferSK, EasyClientNumber,
+ CASE 
+	WHEN p.Name = 'Axi Card PL'
+	THEN 'AXI PL'
+	WHEN p.Name = 'Axi Card PL 2'
+	THEN 'AXI PL'
+	WHEN p.Name = 'Axi Card PL 3 ST'
+	THEN 'AXI PL'
+ELSE p.Name
+END AS Product, 
+CASE 
+	WHEN fo.Name = '????????? ?????'
+		THEN 'Moratory interest'
+	WHEN fo.Name = '????? ???????????'
+		THEN 'Credit Limit Commission (CLC)'
+	WHEN fo.Name = '????????? ?? ???????????? ?? ????????? ??????????'
+		THEN 'Credit Limit Commission (CLC)'
+	WHEN fo.Name = '????????? ????? 1'
+		THEN 'Contractual Interest Rate (CIR)'
+	WHEN fo.Name = '????????? ????? ????????'
+		THEN 'Collection tax'
+	WHEN fo.Name = '????? ?????????? ?? ???????? ??????????'
+		THEN 'Card Administration Fee (CAF)'
+	WHEN fo.Name = '????????'
+		THEN 'Discount'
+ELSE fo.Name
+END AS Accural,  
+	SUM(Amount) AS Amount
+FROM
+dwh.FactExtraExpenses ee
+JOIN dwh.DimFinOperation fo ON fo.FinOperationSK = ee.FinOperationSK
+JOIN dwh.DimOffers o ON o.OfferSK = ee.OfferSK
+JOIN dwh.DimProduct p ON p.ProductSK = o.ProductSK
+--JOIN dwh.DimCards c ON c.CardSK = ee.CardSK
+WHERE --CONVERT(date, ee.CDate) >= DATEADD(month, DATEDIFF(month, 0, GETDATE()), 0)
+		        CONVERT(DATE, ee.CDate, 4) >= @FirstOfMonth 
+	        AND CONVERT(DATE, ee.CDate, 4) <= @CurrentDate
+			AND ee.FinOperationSK IN (3,4,5,6,9,10,11,36,45)
+			--AND EasyClientNumber = 171046
+GROUP BY-- o.OfferSK, EasyClientNumber, 
+CONVERT(date, ee.CDate), p.Name, fo.Name
+
+
+ ")
+    
+    start_time <- Sys.time()
+    CreditCardCharges_PL <- DBI::dbFetch(DBI::dbSendQuery(myc, CreditCardCharges_PL))
+    print(paste("Done in", round(difftime(Sys.time(), start_time,unit = "mins"),2), "minutes"))
+    
+    #Close the database connection
+    DBI::dbDisconnect(myc)
+    
+  }
+  
+  #Closed Cards PL
+  {
+    myc <- DBI::dbConnect(odbc::odbc()
+                          , driver = "SQL Server"
+                          , server = "scorpio.smartitbg.int"
+                          , database = "BIsmartWCPL"
+    )
+    
+    ClosedCards_PL <- paste0(" 	declare @CurrentDate date = getdate();
+declare @FirstOfMonth date = case when day(getdate())=1 then DATEADD(DAY,1,EOMONTH(@CurrentDate,-2)) else DATEADD(DAY,1,EOMONTH(@CurrentDate,-1)) end; 
+
+SELECT  CONVERT(DATE,ClosureDate) AS Date,
+Product, 
+CASE
+	WHEN CloseReason = '??????? ??? ??????'
+		THEN 'Closed cards'
+	WHEN CloseReason = '???????? ?? ??????????'
+		THEN 'Closed cards'
+	WHEN CloseReason = '?????'
+		THEN 'Cession'
+	ELSE CloseReason
+END AS CloseReason, 
+	COUNT(EasyClientNumber) AS Count
+		FROM
+	(SELECT DISTINCT  CASE 
+	WHEN p.Name = 'Axi Card PL'
+	THEN 'AXI PL'
+	WHEN p.Name = 'Axi Card PL 2'
+	THEN 'AXI PL'
+	WHEN p.Name = 'Axi Card PL 3 ST'
+	THEN 'AXI PL'
+ELSE p.Name
+END AS Product, 
+	o.LDate AS ClosureDate, 
+	Code AS CloseReason, 
+	c.EasyClientNumber
+	  FROM dwh.DimOffers o
+	  JOIN dwh.DimOfferHist oh ON oh.OfferSK = o.OfferSK
+	  JOIN dwh.DimCards c ON c.OfferSK = o.OfferSK
+	  JOIN dwh.DimProduct p ON p.ProductSK = o.ProductSK
+	  JOIN dwh.DimOffCloseReason cr ON cr.CloseReasonSK = o.CloseReasonSK
+	  WHERE --CONVERT(date, o.DateClosed) >=  DATEADD(month, DATEDIFF(month, 0, GETDATE()), 0)
+	  		      CONVERT(DATE, o.DateClosed, 4) >= @FirstOfMonth 
+	          AND CONVERT(DATE, o.DateClosed, 4) <= @CurrentDate
+			  AND Latest = '1'  
+			  AND p.Name != 'N/A') 
+	  AS Result
+	  GROUP BY Product,  CONVERT(DATE,ClosureDate), CloseReason
+
+
+ ")
+    
+    start_time <- Sys.time()
+    ClosedCards_PL <- DBI::dbFetch(DBI::dbSendQuery(myc, ClosedCards_PL))
+    print(paste("Done in", round(difftime(Sys.time(), start_time,unit = "mins"),2), "minutes"))
+    
+    #Close the database connection
+    DBI::dbDisconnect(myc)
+  }
+}
+
+# Romania Queries Load!
+{
+  # Approved Clients RO
+  {
+    myc <- DBI::dbConnect(odbc::odbc()
+                          , driver = "SQL Server"
+                          , server = "scorpio.smartitbg.int"
+                          , database = "BIsmartWCRO"
+    )
+    
+    AppCards_RO <- paste0("    declare @CurrentDate date = getdate();
+declare @FirstOfMonth date = case when day(getdate())=1 then DATEADD(DAY,1,EOMONTH(@CurrentDate,-2)) else DATEADD(DAY,1,EOMONTH(@CurrentDate,-1)) end; 
+
+SELECT FORMAT(DateApproved, 'dd.MM.yyyy') AS Date,
+   CASE 
+    WHEN p.Name = 'AFR'
+		THEN 'Axi RO'
+    WHEN p.Name = 'AFR 2'
+		THEN 'Axi RO'
+    WHEN p.Name = 'AFR 3'
+		THEN 'Axi RO'
+	WHEN p.Name = 'AFR 2 - SC'
+		THEN 'Axi RO'
+	ELSE p.Name
+END AS Product,
+	COUNT(CreditCardLimit) AS ApprovedClients, 
+	SUM(CreditCardLimit) AS SumLimit
+  FROM dwh.DimOffers o
+  JOIN dwh.DimProduct p ON o.ProductSK = p.ProductSK
+  WHERE  --CONVERT(DATE, DateApproved) >= DATEADD(month, DATEDIFF(month, 0, GETDATE()), 0)
+  	  		   CONVERT(DATE, DateApproved, 4) >= @FirstOfMonth 
+	       AND CONVERT(DATE, DateApproved, 4) <= @CurrentDate
+		   AND (DateRefused IS NULL OR DateRefused < DateApproved)
+		   AND (DateRejected IS NULL OR DateRejected < DateApproved)
+  GROUP BY FORMAT(DateApproved, 'dd.MM.yyyy'), p.Name
+")
+    
+    start_time <- Sys.time()
+    AppCards_RO <- DBI::dbFetch(DBI::dbSendQuery(myc, AppCards_RO))
+    print(paste("Done in", round(difftime(Sys.time(), start_time,unit = "mins"),2), "minutes"))
+    
+    #Close the database connection
+    DBI::dbDisconnect(myc)
+  }
+  
+  # Activated Cards RO
+  {myc <- DBI::dbConnect(odbc::odbc()
+                         , driver = "SQL Server"
+                         , server = "scorpio.smartitbg.int"
+                         , database = "BIsmartWCRO"
+  )
+    
+    ActivatedCards_RO <- paste0("      declare @CurrentDate date = getdate();
+declare @FirstOfMonth date = case when day(getdate())=1 then DATEADD(DAY,1,EOMONTH(@CurrentDate,-2)) else DATEADD(DAY,1,EOMONTH(@CurrentDate,-1)) end; 
+
+SELECT FORMAT(ActivationDate, 'dd.MM.yyyy') AS Date, 
+   CASE 
+    WHEN p.Name = 'AFR'
+		THEN 'Axi RO'
+    WHEN p.Name = 'AFR 2'
+		THEN 'Axi RO'
+    WHEN p.Name = 'AFR 3'
+		THEN 'Axi RO'
+	WHEN p.Name = 'AFR 2 - SC'
+		THEN 'Axi RO'
+	ELSE p.Name
+END AS Product, 
+   COUNT(p.Name) AS ActivatedClients,
+   SUM(Limit) AS ActivatedLimit
+  FROM dwh.DimCards c
+  JOIN dwh.DimOffers o ON o.OfferSK = c.OfferSK
+  JOIN dwh.DimProduct p ON o.ProductSK = p.ProductSK
+  WHERE  --CONVERT(DATE, ActivationDate) >= DATEADD(month, DATEDIFF(month, 0, GETDATE()), 0)
+    	  	   CONVERT(DATE, ActivationDate, 4) >= @FirstOfMonth 
+	       AND CONVERT(DATE, ActivationDate, 4) <= @CurrentDate
+  GROUP BY FORMAT(ActivationDate, 'dd.MM.yyyy'), p.Name
+")
+    
+    start_time <- Sys.time()
+    ActivatedCards_RO <- DBI::dbFetch(DBI::dbSendQuery(myc, ActivatedCards_RO))
+    print(paste("Done in", round(difftime(Sys.time(), start_time,unit = "mins"),2), "minutes"))
+    
+    #Close the database connection
+    DBI::dbDisconnect(myc)
+  }
+  
+  #Utilliezed Amounts RO
+  {
+    myc <- DBI::dbConnect(odbc::odbc()
+                          , driver = "SQL Server"
+                          , server = "scorpio.smartitbg.int"
+                          , database = "BIsmartWCRO"
+    )
+    
+    UtillizedAMount_RO <- paste0("declare @CurrentDate date = getdate();
+declare @FirstOfMonth date = case when day(getdate())=1 then DATEADD(DAY,1,EOMONTH(@CurrentDate,-2)) else DATEADD(DAY,1,EOMONTH(@CurrentDate,-1)) end; 
+
+SELECT CONVERT(date, CDate) AS Date ,
+   CASE 
+    WHEN Product = 'AFR'
+		THEN 'Axi RO'
+    WHEN Product = 'AFR 2'
+		THEN 'Axi RO'
+    WHEN Product = 'AFR 3'
+		THEN 'Axi RO'
+	WHEN Product = 'AFR 2 - SC'
+		THEN 'Axi RO'
+	ELSE Product
+END AS Product, 
+CASE	
+	WHEN TransactionChanel = 'POSCASH'
+		THEN 'POS'
+	ELSE TransactionChanel
+END AS TransactionChanel
+	, SUM(AmountTransactionBilling * -1) AS Amount,
+COUNT(AmountTransactionBilling) AS CountTransaction
+FROM(
+SELECT DISTINCT fct.OfferSK,  fct.CDate, tc.Name AS TransactionChanel,
+p.Name AS Product, AmountTransactionBilling, Description
+		   FROM dwh.FactCardTransactions fct
+		   JOIN dwh.DimCards c ON c.OfferSK = fct.OfferSK
+		   JOIN dwh.DimOffers do ON do.OfferSK = fct.OfferSK
+		   JOIN DWh.DimProduct p ON p.ProductSK = do.ProductSK
+		   JOIN dwh.DimTransactionChannels tc ON tc.TransactionChannelSK = fct.TransactionChannelSK
+		   WHERE tc.Name NOT IN ('BALANCE', 'PIN_CHANGE') 
+		   --AND CONVERT(date, fct.CDate) >= DATEADD(month, DATEDIFF(month, 0, GETDATE()), 0)
+		   AND CONVERT(DATE, fct.CDate, 4) >= @FirstOfMonth 
+	       AND CONVERT(DATE, fct.CDate, 4) <= @CurrentDate
+		   AND AmountTransactionBilling < 0 
+		   --AND EasyClientNumber = 692391
+		   AND ResponseCodeSK = 1
+		  )AS Result
+		   GROUP BY  CONVERT(date, CDate), Product, TransactionChanel
+
+
+
+
+ ")
+    
+    start_time <- Sys.time()
+    UtillizedAMount_RO <- DBI::dbFetch(DBI::dbSendQuery(myc, UtillizedAMount_RO))
+    print(paste("Done in", round(difftime(Sys.time(), start_time,unit = "mins"),2), "minutes"))
+    
+    #Close the database connection
+    DBI::dbDisconnect(myc)
+  }
+  
+  #Card Payments RO
+  {
+    myc <- DBI::dbConnect(odbc::odbc()
+                          , driver = "SQL Server"
+                          , server = "scorpio.smartitbg.int"
+                          , database = "BIsmartWCRO"
+    )
+    
+    PaymentsCards_RO <- paste0("declare @CurrentDate date = getdate();
+declare @FirstOfMonth date = case when day(getdate())=1 then DATEADD(DAY,1,EOMONTH(@CurrentDate,-2)) else DATEADD(DAY,1,EOMONTH(@CurrentDate,-1)) end; 
+
+SELECT 
+--EasyClientNumber, OfferSK,
+CONVERT(DATE, CDATE) AS [Date], 
+   CASE 
+    WHEN Product = 'AFR'
+		THEN 'Axi RO'
+    WHEN Product = 'AFR 2'
+		THEN 'Axi RO'
+    WHEN Product = 'AFR 3'
+		THEN 'Axi RO'
+	WHEN Product = 'AFR 2 - SC'
+		THEN 'Axi RO'
+	ELSE Product
+END AS Product, 
+CASE	
+	WHEN Notes = '??????? ???? Vpos'
+		THEN 'Vpos'
+	WHEN Notes = 'Repayment PayPoint'
+		THEN 'PayPoint'
+	WHEN Notes like 'Repayment%'
+		THEN 'PayPoint'
+	ELSE Notes
+END AS Notes,
+SUM(Amount) AS Amount
+	FROM (SELECT fo.OfferSK, p.Name AS Product, 
+	Notes, 
+	fo.CDATE, 
+	Amount
+			FROM dwh.FactFinanceOperations fo
+			--JOIN dwh.DimCards dc ON dc.OfferSK = fo.OfferSK
+			JOIN dwh.DimPaymentPartners pp ON pp.PaymentPartnersSK = fo.PaymentPartnersSK
+			JOIN dwh.DimOffers do ON do.OfferSK = FO.OfferSK
+			JOIN dwh.DimProduct p ON p.ProductSK = do.ProductSK
+			WHERE FinOperationSK = '1' 
+			--AND CONVERT(DATE, fo.CDATE, 4) >= DATEADD(month, DATEDIFF(month, 0, GETDATE()), 0)
+			AND CONVERT(DATE, fo.CDate, 4) >= @FirstOfMonth 
+	        AND CONVERT(DATE, fo.CDate, 4) <= @CurrentDate
+			--AND ActivationDate IS NOT NULL
+			--and fo.OfferSK = 14725
+			) AS Result
+  GROUP BY
+  --EasyClientNumber,
+   --OfferSK,
+  Notes, Product,CONVERT(DATE, CDATE)
+  ORDER BY Date, Product
+
+
+
+
+
+
+ ")
+    
+    start_time <- Sys.time()
+    PaymentsCards_RO <- DBI::dbFetch(DBI::dbSendQuery(myc, PaymentsCards_RO))
+    print(paste("Done in", round(difftime(Sys.time(), start_time,unit = "mins"),2), "minutes"))
+    
+    #Close the database connection
+    DBI::dbDisconnect(myc)
+  }
+  
+  #Winnigs/Reversal
+  {
+    myc <- DBI::dbConnect(odbc::odbc()
+                          , driver = "SQL Server"
+                          , server = "scorpio.smartitbg.int"
+                          , database = "BIsmartWCRO"
+    )
+    
+    Winnigs_Reversal_RO <- paste0("declare @CurrentDate date = getdate();
+declare @FirstOfMonth date = case when day(getdate())=1 then DATEADD(DAY,1,EOMONTH(@CurrentDate,-2)) else DATEADD(DAY,1,EOMONTH(@CurrentDate,-1)) end; 
+
+SELECT CONVERT(date, CDate) AS Date ,
+   CASE 
+    WHEN Product = 'AFR'
+		THEN 'Axi RO'
+    WHEN Product = 'AFR 2'
+		THEN 'Axi RO'
+    WHEN Product = 'AFR 3'
+		THEN 'Axi RO'
+	WHEN Product = 'AFR 2 - SC'
+		THEN 'Axi RO'
+	ELSE Product
+END AS Product, 
+
+'Winnings/Reversal' AS Notes
+--CASE	
+--	WHEN TransactionChanel = 'POSCASH'
+--		THEN 'POS'
+--	ELSE TransactionChanel
+--END AS TransactionChanel
+,SUM(AmountTransactionBilling) AS Amount
+--COUNT(AmountTransactionBilling) AS CountTransaction
+FROM(
+SELECT DISTINCT fct.OfferSK,  fct.CDate, tc.Name AS TransactionChanel,
+p.Name AS Product, AmountTransactionBilling, Description
+		   FROM dwh.FactCardTransactions fct
+		   JOIN dwh.DimCards c ON c.OfferSK = fct.OfferSK
+		   JOIN dwh.DimOffers do ON do.OfferSK = fct.OfferSK
+		   JOIN DWh.DimProduct p ON p.ProductSK = do.ProductSK
+		   JOIN dwh.DimTransactionChannels tc ON tc.TransactionChannelSK = fct.TransactionChannelSK
+		   WHERE tc.Name NOT IN ('BALANCE', 'PIN_CHANGE') 
+		   --AND CONVERT(date, fct.CDate) >= DATEADD(month, DATEDIFF(month, 0, GETDATE()), 0)
+		   AND CONVERT(DATE, fct.CDate, 4) >= @FirstOfMonth 
+	       AND CONVERT(DATE, fct.CDate, 4) <= @CurrentDate
+		   AND AmountTransactionBilling > 0 
+		   --AND EasyClientNumber = 692391
+		   AND ResponseCodeSK = 1
+		  )AS Result
+		   GROUP BY  CONVERT(date, CDate), Product, TransactionChanel
+
+
+
+
+ ")
+    
+    start_time <- Sys.time()
+    Winnigs_Reversal_RO <- DBI::dbFetch(DBI::dbSendQuery(myc, Winnigs_Reversal_RO))
+    print(paste("Done in", round(difftime(Sys.time(), start_time,unit = "mins"),2), "minutes"))
+    
+    #Close the database connection
+    DBI::dbDisconnect(myc)
+  }
+  
+  #Card Charges RO
+  {
+    myc <- DBI::dbConnect(odbc::odbc()
+                          , driver = "SQL Server"
+                          , server = "scorpio.smartitbg.int"
+                          , database = "BIsmartWCRO"
+    )
+    
+    CreditCardCharges_RO <- paste0("declare @CurrentDate date = getdate();
+declare @FirstOfMonth date = case when day(getdate())=1 then DATEADD(DAY,1,EOMONTH(@CurrentDate,-2)) else DATEADD(DAY,1,EOMONTH(@CurrentDate,-1)) end; 
+
+SELECT CONVERT(date, ee.CDate) AS Date, 
+   CASE 
+    WHEN p.Name = 'AFR'
+		THEN 'Axi RO'
+    WHEN p.Name = 'AFR 2'
+		THEN 'Axi RO'
+    WHEN p.Name = 'AFR 3'
+		THEN 'Axi RO'
+	WHEN p.Name = 'AFR 2 - SC'
+		THEN 'Axi RO'
+	ELSE p.Name
+END AS Product, 
+CASE 
+WHEN fo.Name = '????????? ?????'
+	THEN 'Moratory interest'
+WHEN fo.Name = '????? ??????'
+	THEN 'Delay interest'
+WHEN fo.Name = '????????? ????? 1'
+	THEN 'Interest 1'
+WHEN fo.Name = '????????? ????? 2'
+	THEN 'Interest 2'
+WHEN fo.Name = '????????? ????? 3'
+	THEN 'Interest 3'
+WHEN fo.Name = '????????? ????? ????????'
+	THEN 'Collection fee'
+WHEN fo.Name = '????? ???????????'
+	THEN 'Revolving fee'
+WHEN fo.Name = '????????'
+	THEN 'Discount'
+ELSE fo.Name
+END AS Accural, 
+	SUM(Amount) AS Amount
+FROM
+dwh.FactExtraExpenses ee
+JOIN dwh.DimFinOperation fo ON fo.FinOperationSK = ee.FinOperationSK
+JOIN dwh.DimOffers o ON o.OfferSK = ee.OfferSK
+JOIN dwh.DimProduct p ON p.ProductSK = o.ProductSK
+WHERE --CONVERT(date, ee.CDate) >= DATEADD(month, DATEDIFF(month, 0, GETDATE()), 0)
+			    CONVERT(DATE, ee.CDate, 4) >= @FirstOfMonth 
+	        AND CONVERT(DATE, ee.CDate, 4) <= @CurrentDate
+			AND ee.FinOperationSK IN (3, 4, 5, 6, 7, 8, 9,10,11,19,20,21,33,36,37,49,50,51,54)
+GROUP BY CONVERT(date, ee.CDate), p.Name, fo.Name
+
+
+
+
+
+ ")
+    
+    start_time <- Sys.time()
+    CreditCardCharges_RO <- DBI::dbFetch(DBI::dbSendQuery(myc, CreditCardCharges_RO))
+    print(paste("Done in", round(difftime(Sys.time(), start_time,unit = "mins"),2), "minutes"))
+    
+    #Close the database connection
+    DBI::dbDisconnect(myc)
+    
+  }
+  
+  #Closed Cards RO
+  {
+    myc <- DBI::dbConnect(odbc::odbc()
+                          , driver = "SQL Server"
+                          , server = "scorpio.smartitbg.int"
+                          , database = "BIsmartWCRO"
+    )
+    
+    ClosedCards_RO <- paste0(" 
+    declare @CurrentDate date = getdate();
+declare @FirstOfMonth date = case when day(getdate())=1 then DATEADD(DAY,1,EOMONTH(@CurrentDate,-2)) else DATEADD(DAY,1,EOMONTH(@CurrentDate,-1)) end; 
+    
+    SELECT  CONVERT(DATE,ClosureDate) AS Date,
+   CASE 
+    WHEN Product = 'AFR'
+		THEN 'Axi RO'
+    WHEN Product = 'AFR 2'
+		THEN 'Axi RO'
+    WHEN Product = 'AFR 3'
+		THEN 'Axi RO'
+	WHEN Product = 'AFR 2 - SC'
+		THEN 'Axi RO'
+	ELSE Product
+END AS Product, 
+CASE
+	WHEN CloseReason = '??????? ??? ??????'
+		THEN 'Closed cards'
+	WHEN CloseReason = '???????? ?? ??????????'
+		THEN 'Closed cards'
+	WHEN CloseReason = '?????'
+		THEN 'Cession'
+	ELSE CloseReason
+END AS CloseReason,  
+	COUNT(EasyClientNumber) AS Count
+		FROM
+	(SELECT DISTINCT p.Name AS Product, 
+	o.LDate AS ClosureDate, 
+	Code AS CloseReason, 
+	c.EasyClientNumber
+	  FROM dwh.DimOffers o
+	  JOIN dwh.DimOfferHist oh ON oh.OfferSK = o.OfferSK
+	  JOIN dwh.DimCards c ON c.OfferSK = o.OfferSK
+	  JOIN dwh.DimProduct p ON p.ProductSK = o.ProductSK
+	  JOIN dwh.DimOffCloseReason cr ON cr.CloseReasonSK = o.CloseReasonSK
+	  WHERE --CONVERT(date, o.DateClosed) >=  DATEADD(month, DATEDIFF(month, 0, GETDATE()), 0)
+	  			    CONVERT(DATE, o.DateClosed, 4) >= @FirstOfMonth 
+	        AND CONVERT(DATE, o.DateClosed, 4) <= @CurrentDate
+	  AND Latest = '1'  
+	  AND p.Name != 'N/A') 
+	  AS Result
+	  GROUP BY Product,  CONVERT(DATE,ClosureDate), CloseReason
+ ")
+    
+    start_time <- Sys.time()
+    ClosedCards_RO <- DBI::dbFetch(DBI::dbSendQuery(myc, ClosedCards_RO))
+    print(paste("Done in", round(difftime(Sys.time(), start_time,unit = "mins"),2), "minutes"))
+    
+    #Close the database connection
+    DBI::dbDisconnect(myc)
+  }
+}
+
+# Spain Queries Load!
+{
+  # Approved Clients SP
+  {
+    myc <- DBI::dbConnect(odbc::odbc()
+                          , driver = "SQL Server"
+                          , server = "scorpio.smartitbg.int"
+                          , database = "BIsmartWCSP"
+    )
+    
+    AppCards_SP <- paste0("  declare @CurrentDate date = getdate();
+declare @FirstOfMonth date = case when day(getdate())=1 then DATEADD(DAY,1,EOMONTH(@CurrentDate,-2)) else DATEADD(DAY,1,EOMONTH(@CurrentDate,-1)) end; 
+
+select
+CONVERT(DATE, DateApproved, 4) AS Date,
+Case 
+	When p.Name = 'AxiES'
+		Then 'AXI ES'
+	When p.Name = 'AxiES - 2'
+		Then 'AXI ES'
+ELSE p.Name
+END As Product,
+--ContractNumber, 
+SUM(cpsc.Limit) as SumLimit,
+Count(cpsc.Limit) as ApprovedClients
+from dwh.DimOfferHist oh
+JOIN dwh.DimProduct p ON p.ProductSK = oh.ProductSK
+Join dwhsc.DimCreditProposalSC cpsc ON cpsc.OfferSYSID = oh.OfferSYSID
+where CONVERT(DATE, DateApproved, 4) >= @FirstOfMonth 
+	    AND CONVERT(DATE, DateApproved, 4) <= @CurrentDate
+		AND (DateRefused < DateApproved)
+		AND (DateRejected < DateApproved)
+and Latest = 1
+--AND ContractNumber = 14012471 -- diff limit
+group by p.Name,--ContractNumber,
+CONVERT(DATE, DateApproved, 4)
+")
+    
+    start_time <- Sys.time()
+    AppCards_SP <- DBI::dbFetch(DBI::dbSendQuery(myc, AppCards_SP))
+    print(paste("Done in", round(difftime(Sys.time(), start_time,unit = "mins"),2), "minutes"))
+    
+    #Close the database connection
+    DBI::dbDisconnect(myc)
+  }
+  
+  # Activated Cards SP
+  {myc <- DBI::dbConnect(odbc::odbc()
+                         , driver = "SQL Server"
+                         , server = "scorpio.smartitbg.int"
+                         , database = "BIsmartWCSP"
+  )
+    
+    ActivatedCards_SP <- paste0("    declare @CurrentDate date = getdate();
+declare @FirstOfMonth date = case when day(getdate())=1 then DATEADD(DAY,1,EOMONTH(@CurrentDate,-2)) else DATEADD(DAY,1,EOMONTH(@CurrentDate,-1)) end; 
+
+SELECT FORMAT(ActivationDate, 'dd.MM.yyyy') AS Date, 
+Case 
+	When p.Name = 'AxiES'
+		Then 'AXI ES'
+	When p.Name = 'AxiES - 2'
+		Then 'AXI ES'
+ELSE p.Name
+END As Product,
+   COUNT(p.Name) AS ActivatedClients,
+   SUM(ch.Limit) AS ActivatedLimit
+  FROM dwh.DimCardsHist ch
+  JOIN dwh.DimOfferHist oh ON oh.OfferSYSID = ch.OfferSYSID
+  JOIN dwh.DimProduct p ON oh.ProductSK = p.ProductSK
+  WHERE  --CONVERT(DATE, ActivationDate) >= DATEADD(month, DATEDIFF(month, 0, GETDATE()), 0)
+    	  	   CONVERT(DATE, ActivationDate, 4) >= @FirstOfMonth 
+	       AND CONVERT(DATE, ActivationDate, 4) <= @CurrentDate
+		   AND ch.Latest = 1
+		   AND oh.Latest = 1
+  GROUP BY FORMAT(ActivationDate, 'dd.MM.yyyy'), p.Name
+")
+    
+    start_time <- Sys.time()
+    ActivatedCards_SP <- DBI::dbFetch(DBI::dbSendQuery(myc, ActivatedCards_SP))
+    print(paste("Done in", round(difftime(Sys.time(), start_time,unit = "mins"),2), "minutes"))
+    
+    #Close the database connection
+    DBI::dbDisconnect(myc)
+  }
+  
+  #Utilliezed Amounts SP
+  {
+    myc <- DBI::dbConnect(odbc::odbc()
+                          , driver = "SQL Server"
+                          , server = "scorpio.smartitbg.int"
+                          , database = "BIsmartWCSP"
+    )
+    
+    UtillizedAMount_SP <- paste0("declare @CurrentDate date = getdate();
+declare @FirstOfMonth date = case when day(getdate())=1 then DATEADD(DAY,1,EOMONTH(@CurrentDate,-2)) else DATEADD(DAY,1,EOMONTH(@CurrentDate,-1)) end; 
+
+
+Select
+CONVERT(date, fct.CDate) AS Date
+,Case 
+	When p.Name = 'AxiES'
+		Then 'AXI ES'
+	When p.Name = 'AxiES - 2'
+		Then 'AXI ES'
+ELSE p.Name
+END As Product
+,tc.Name AS TransactionChanel
+, SUM(AmountTransactionBilling * -1) AS Amount,
+COUNT(AmountTransactionBilling) AS CountTransaction 
+from dwh.FactCardTransactions fct
+JOIN dwh.DimCardsHist ch ON ch.CardSYSID = fct.CardSYSID
+JOIN dwh.DimOfferHist oh ON oh.OfferSYSID = ch.OfferSYSID
+JOIN dwh.DimProduct p ON p.ProductSK = oh.ProductSK
+JOIN dwh.DimTransactionChannels tc ON tc.TransactionChannelSK = fct.TransactionChannelSK
+ WHERE CONVERT(DATE, fct.CDate, 4) >= @FirstOfMonth 
+	       AND CONVERT(DATE, fct.CDate, 4) <= @CurrentDate
+		   AND tc.Name NOT IN ('BALANCE', 'PIN_CHANGE') 
+		   AND AmountTransactionBilling < 0 
+		   AND ResponseCodeSK = 1
+		   AND ch.Latest = 1
+		   AND oh.Latest = 1
+ GROUP BY  CONVERT(date, fct.CDate), tc.Name , p.Name
+ ")
+    
+    start_time <- Sys.time()
+    UtillizedAMount_SP <- DBI::dbFetch(DBI::dbSendQuery(myc, UtillizedAMount_SP))
+    print(paste("Done in", round(difftime(Sys.time(), start_time,unit = "mins"),2), "minutes"))
+    
+    #Close the database connection
+    DBI::dbDisconnect(myc)
+  }
+  
+  #Card Payments SP
+  {
+    myc <- DBI::dbConnect(odbc::odbc()
+                          , driver = "SQL Server"
+                          , server = "scorpio.smartitbg.int"
+                          , database = "BIsmartWCSP"
+    )
+    
+    PaymentsCards_SP <- paste0("declare @CurrentDate date = getdate();
+declare @FirstOfMonth date = case when day(getdate())=1 then DATEADD(DAY,1,EOMONTH(@CurrentDate,-2)) else DATEADD(DAY,1,EOMONTH(@CurrentDate,-1)) end; 
+
+SELECT --ContractNumber,--, OfferSK,
+CONVERT(DATE, CDATE) AS [Date], 
+Case 
+	When Product = 'AxiES'
+		Then 'AXI ES'
+	When Product = 'AxiES - 2'
+		Then 'AXI ES'
+ELSE Product
+END As Product,
+CASE	
+	WHEN Notes = 'vpos'
+		THEN 'Vpos'
+	WHEN Notes = 'Santander'
+		THEN 'Bank Santander'
+	WHEN Notes = 'Caixa'
+		THEN 'CAIXA'
+	ELSE Notes
+END AS Notes,
+SUM(Amount) AS Amount
+	FROM (SELECT fo.offersysid, 
+	p.Name AS Product, 
+	--ContractNumber,
+	Partner AS Notes, 
+	fo.CDATE, 
+	Amount
+			FROM dwh.FactFinanceOperations fo
+			JOIN dwh.DimFOAdditionalData fad ON fad.FinanceOperationSK = fo.FinanceOperationSK
+			--JOIN dwh.DimCards dc ON dc.OfferSK = fo.OfferSK
+			--JOIN dwh.DimPaymentPartners pp ON pp.PaymentPartnersSK = fo.PaymentPartnersSK
+			JOIN dwh.DimOfferHist do ON do.OfferSYSID = FO.offersysid
+			JOIN dwh.DimProduct p ON p.ProductSK = do.ProductSK
+			WHERE FinOperationSK = '1' 
+			--AND CONVERT(DATE, fo.CDATE, 4) >= DATEADD(month, DATEDIFF(month, 0, GETDATE()), 0)
+			AND CONVERT(DATE, fo.CDate, 4) >= @FirstOfMonth 
+	        AND CONVERT(DATE, fo.CDate, 4) <= @CurrentDate
+			--AND ActivationDate IS NOT NULL
+			--and fo.OfferSK = 14725
+			AND do.Latest= 1
+			) AS Result
+  GROUP BY
+  --ContractNumber,
+   --OfferSK,
+  Product,
+  Notes,CONVERT(DATE, CDATE)
+  ORDER BY Date, Product
+
+
+ ")
+    
+    start_time <- Sys.time()
+    PaymentsCards_SP <- DBI::dbFetch(DBI::dbSendQuery(myc, PaymentsCards_SP))
+    print(paste("Done in", round(difftime(Sys.time(), start_time,unit = "mins"),2), "minutes"))
+    
+    #Close the database connection
+    DBI::dbDisconnect(myc)
+  }
+  
+  #Winnigs/Reversal SP
+  {
+    myc <- DBI::dbConnect(odbc::odbc()
+                          , driver = "SQL Server"
+                          , server = "scorpio.smartitbg.int"
+                          , database = "BIsmartWCSP"
+    )
+    
+    Winnigs_Reversal_SP <- paste0("declare @CurrentDate date = getdate();
+declare @FirstOfMonth date = case when day(getdate())=1 then DATEADD(DAY,1,EOMONTH(@CurrentDate,-2)) else DATEADD(DAY,1,EOMONTH(@CurrentDate,-1)) end; 
+
+
+Select
+CONVERT(date, fct.CDate) AS Date
+,Case 
+	When p.Name = 'AxiES'
+		Then 'AXI ES'
+	When p.Name = 'AxiES - 2'
+		Then 'AXI ES'
+ELSE p.Name
+END As Product
+,'Winnings/Reversal' AS Notes
+--,tc.Name AS TransactionChanel
+, SUM(AmountTransactionBilling) AS Amount
+--COUNT(AmountTransactionBilling) AS CountTransaction 
+from dwh.FactCardTransactions fct
+JOIN dwh.DimCardsHist ch ON ch.CardSYSID = fct.CardSYSID
+JOIN dwh.DimOfferHist oh ON oh.OfferSYSID = ch.OfferSYSID
+JOIN dwh.DimProduct p ON p.ProductSK = oh.ProductSK
+JOIN dwh.DimTransactionChannels tc ON tc.TransactionChannelSK = fct.TransactionChannelSK
+ WHERE CONVERT(DATE, fct.CDate, 4) >= @FirstOfMonth 
+	       AND CONVERT(DATE, fct.CDate, 4) <= @CurrentDate
+		   AND tc.Name NOT IN ('BALANCE', 'PIN_CHANGE') 
+		   AND AmountTransactionBilling > 0 
+		   AND ResponseCodeSK = 1
+		   AND ch.Latest = 1
+		   AND oh.Latest = 1
+ GROUP BY  CONVERT(date, fct.CDate), tc.Name
+ ,p.Name
+ ")
+    
+    start_time <- Sys.time()
+    Winnigs_Reversal_SP <- DBI::dbFetch(DBI::dbSendQuery(myc, Winnigs_Reversal_SP))
+    print(paste("Done in", round(difftime(Sys.time(), start_time,unit = "mins"),2), "minutes"))
+    
+    #Close the database connection
+    DBI::dbDisconnect(myc)
+  }
+  
+  #Card Charges SP
+  {
+    myc <- DBI::dbConnect(odbc::odbc()
+                          , driver = "SQL Server"
+                          , server = "scorpio.smartitbg.int"
+                          , database = "BIsmartWCSP"
+    )
+    
+    CreditCardCharges_SP <- paste0("declare @CurrentDate date = getdate();
+declare @FirstOfMonth date = case when day(getdate())=1 then DATEADD(DAY,1,EOMONTH(@CurrentDate,-2)) else DATEADD(DAY,1,EOMONTH(@CurrentDate,-1)) end; 
+
+
+
+WITH Chargest_NoDicount AS
+(
+SELECT CONVERT(date, ee.CDate) AS Date, 
+Case 
+	When p.Name = 'AxiES'
+		Then 'AXI ES'
+	When p.Name = 'AxiES - 2'
+		Then 'AXI ES'
+ELSE p.Name
+END As Product,
+--o.OfferSK,EasyClientNumber,
+CASE 
+	WHEN fo.Name = '????????? ?????'
+		THEN 'Penalty Interest Rate (PIR)'
+	WHEN fo.Name = '??????????? ?????'
+		THEN 'Collection Costs (CC)'
+	WHEN fo.Name = '????????? ????? 1'
+		THEN 'Contractual Interest Rate (CIR)'
+	WHEN fo.Name = '????????? ????? ????????'
+		THEN 'Other Credit-Related Costs (OCRS)'
+	WHEN fo.Name = '????????? ?? ???????????? ?? ????????? ??????????'
+		THEN 'Time extension fee (TEF)'
+	WHEN fo.Name = '????????'
+		THEN 'Discount'
+ELSE fo.Name
+END AS Accural, 
+	SUM(Amount) AS Amount	
+FROM
+dwh.FactExtraExpenses ee
+JOIN dwh.DimFinOperation fo ON fo.FinOperationSK = ee.FinOperationSK
+JOIN dwh.DimOfferHist o ON o.OfferSYSID = ee.OfferSYSID
+JOIN dwh.DimProduct p ON p.ProductSK = o.ProductSK
+JOIN dwh.DimCardsHist c ON c.CardSYSID = ee.CardSYSID
+WHERE --CONVERT(date, ee.CDate) >= DATEADD(month, DATEDIFF(month, 0, GETDATE()), 0)
+		        CONVERT(DATE, ee.CDate, 4) >= @FirstOfMonth 
+	        AND CONVERT(DATE, ee.CDate, 4) <= @CurrentDate
+			AND ee.FinOperationSK IN (3,4,5,6,7,10,11,36,44,45,54) --remove Discount 9
+		    AND o.Latest = 1
+			AND c.Latest = 1
+			--AND EasyClientNumber = 14001338
+GROUP BY-- o.OfferSK,EasyClientNumber, 
+CONVERT(date, ee.CDate), p.Name, fo.Name
+),
+
+
+
+Discount_Minus_OneDay AS
+(
+SELECT --CONVERT(date, ee.CDate) AS Date, 
+--o.OfferSK,EasyClientNumber,
+CONVERT(DATE,DATEADD(day, -1, ee.CDate)) as Date, 
+Case 
+	When p.Name = 'AxiES'
+		Then 'AXI ES'
+	When p.Name = 'AxiES - 2'
+		Then 'AXI ES'
+ELSE p.Name
+END As Product,
+CASE 
+	WHEN fo.Name = '????????'
+		THEN 'Discount'
+ELSE fo.Name
+END AS Accural, 
+	SUM(IIF(ee.FinOperationSK = 9, Amount * -1, Amount)) AS Amount
+FROM
+dwh.FactExtraExpenses ee
+JOIN dwh.DimFinOperation fo ON fo.FinOperationSK = ee.FinOperationSK
+JOIN dwh.DimOfferHist o ON o.OfferSYSID = ee.OfferSYSID
+JOIN dwh.DimProduct p ON p.ProductSK = o.ProductSK
+JOIN dwh.DimCardsHist c ON c.CardSYSID = ee.CardSYSID
+WHERE --CONVERT(date, ee.CDate) >= DATEADD(month, DATEDIFF(month, 0, GETDATE()), 0)
+		        CONVERT(DATE,DATEADD(day, -1, ee.CDate)) >= @FirstOfMonth 
+	        AND CONVERT(DATE,DATEADD(day, -1, ee.CDate)) <= @CurrentDate
+			AND ee.FinOperationSK = 9 --IN (3,4,5,6,7,9,10,11,36,44,45,54) --remove Discount 9
+		    AND o.Latest = 1
+			AND c.Latest = 1
+			--AND EasyClientNumber = 14001338
+GROUP BY-- o.OfferSK,EasyClientNumber, 
+CONVERT(date, ee.CDate), p.Name, fo.Name, DATEADD(day, -1, ee.CDate)
+)
+
+
+
+Select * 
+from Chargest_NoDicount cnod
+Union ALL
+Select 
+* from Discount_Minus_OneDay
+
+ ")
+                                   
+                                   start_time <- Sys.time()
+                                   CreditCardCharges_SP <- DBI::dbFetch(DBI::dbSendQuery(myc, CreditCardCharges_SP))
+                                   print(paste("Done in", round(difftime(Sys.time(), start_time,unit = "mins"),2), "minutes"))
+                                   
+                                   #Close the database connection
+                                   DBI::dbDisconnect(myc)
+                                   
+  }
+  
+  #Closed Cards SP
+  {
+    myc <- DBI::dbConnect(odbc::odbc()
+                          , driver = "SQL Server"
+                          , server = "scorpio.smartitbg.int"
+                          , database = "BIsmartWCSP"
+    )
+    
+    ClosedCards_SP <- paste0(" declare @CurrentDate date = getdate();
+declare @FirstOfMonth date = case when day(getdate())=1 then DATEADD(DAY,1,EOMONTH(@CurrentDate,-2)) else DATEADD(DAY,1,EOMONTH(@CurrentDate,-1)) end; 
+    
+SELECT  CONVERT(DATE,ClosureDate) AS Date,
+Case 
+	When Product = 'AxiES'
+		Then 'AXI ES'
+	When Product = 'AxiES - 2'
+		Then 'AXI ES'
+	When Product = 'Axi ES test'
+		Then 'AXI ES'
+ELSE Product
+END As Product,
+CASE
+	WHEN CloseReason = '??????? ??? ??????'
+		THEN 'Closed cards'
+	WHEN CloseReason = '???????? ?? ??????????'
+		THEN 'Closed cards'
+	WHEN CloseReason = '?????'
+		THEN 'Cession'
+	ELSE CloseReason
+END AS CloseReason,  
+	COUNT(ContractNumber) AS Count
+		FROM
+	(SELECT DISTINCT p.Name AS Product, 
+	oh.LDate AS ClosureDate, 
+	Code AS CloseReason, 
+	ContractNumber
+	  FROM dwh.DimOfferHist oh 
+	  JOIN dwh.DimCardsHist ch ON ch.OfferSYSID = oh.OfferSYSID
+	  JOIN dwh.DimProduct p ON p.ProductSK = oh.ProductSK
+	  JOIN dwh.DimOffCloseReason cr ON cr.CloseReasonSK = oh.CloseReasonSK
+	  WHERE --CONVERT(date, o.DateClosed) >=  DATEADD(month, DATEDIFF(month, 0, GETDATE()), 0)
+	  			    CONVERT(DATE, oh.DateClosed, 4) >= @FirstOfMonth 
+	        AND CONVERT(DATE, oh.DateClosed, 4) <= @CurrentDate
+	  AND oh.Latest = 1 
+	  AND ch.Latest = 1
+	  --AND p.Name != 'N/A'
+	  ) 
+	  AS Result
+	  GROUP BY Product,  CONVERT(DATE,ClosureDate), CloseReason
+
+
+ ")
+    
+    start_time <- Sys.time()
+    ClosedCards_SP <- DBI::dbFetch(DBI::dbSendQuery(myc, ClosedCards_SP))
+    print(paste("Done in", round(difftime(Sys.time(), start_time,unit = "mins"),2), "minutes"))
+    
+    #Close the database connection
+    DBI::dbDisconnect(myc)
+  }
+}
+
+#DummyDF 
+{
+  DummyClosedCards <- data.frame (Date  = c(Sys.Date()),
+                                  Product = c("Dummy"),
+                                  CloseReason = c("Dummy"),
+                                  Count = c(1))
+  
+  DummyApprovedCard <- data.frame(Date  = c(Sys.Date()),
+                                  Product = c("Dummy"),
+                                  ApprovedClients = c(1),
+                                  SumLimit = c(1)) %>%
+    mutate(Date = as.Date(Date))
+  
+  DummyActivatedCard <- data.frame(Date  = c(Sys.Date()),
+                                   Product = c("Dummy"),
+                                   ActivatedClients = c(1),
+                                   ActivatedLimit = c(1)) %>%
+    mutate(Date = as.Date(Date))
+  
+  DummyWinnings <- data.frame(Date  = c(Sys.Date()),
+                              Product = c("Dummy"),
+                              Amount = c(0),
+                              CountTransaction = c(0),
+                              TransactionChanel = c("Dummy")) %>%
+    mutate(Date = as.Date(Date))
+  
+  
+}
+
+#Date DF
+{
+  
+  
+  
+  
+  Dates_DF_HideColumn = UtillizedAMount_BG %>%
+    select(Date) %>%
+    mutate(HideColumn = "N") %>%
+    filter(duplicated(Date) == FALSE) %>%
+    group_by(Date) %>%
+    dcast(HideColumn ~ Date)
+  
+  
+}
+
+#Bulgaria R-revision!
+{
+  # Approved Clients BG
+  {
+    Approved_Count_BG = AppCards_BG %>%
+      filter(Date != "31.12.9999") %>%
+      mutate(Date = dmy(Date)) %>%
+      left_join(Product_Agg, by = c("Product" = "Product_Old")) %>%
+      select(-Product, Product = Product.y) %>%
+      mutate(Product = ifelse(Product == "Axi Credit 4 - paper", "Axi Credit 4"
+                              ,ifelse(Product == "?1 ????????????? ?? 2", "?1 ????????????? ??"
+                                      ,ifelse(Product == "?????? ?? ?? 4 ", "Axi Credit 4"
+                                              ,ifelse(Product == "?????? ?? ?? 4 - paper", "Axi Credit 4"
+                                                      , Product))))) %>%
+      mutate(Approved = ifelse(Product == "Axi Credit 2", "Approved loans",
+                               ifelse(Product == "Axi Credit 3","Approved loans",
+                                      ifelse(Product == "Axi Credit 4","Approved loans",
+                                             ifelse(Product == "A1 Credit 1","Approved loans",
+                                                    ifelse(Product == "A1 Credit 2","Approved loans",
+                                                           ifelse(Product == "?1 ????????????? ??? ??","Approved loans",
+                                                                  ifelse(Product == "?1 ????????????? ??","Approved loans", "Approved"    
+                                                                  )))))))) %>%
+      unite(VLookUPCondition, c(Product, Approved), sep = "-" ) %>%
+      group_by(VLookUPCondition, Date) %>%
+      summarise(ApprovedClients = sum(ApprovedClients)) %>%
+      dcast(VLookUPCondition ~ Date, value.var = "ApprovedClients")
+    
+    ####################################################################
+    Approved_Limit_BG = AppCards_BG %>%
+      filter(Date != "31.12.9999") %>%
+      mutate(Date = dmy(Date)) %>%
+      left_join(Product_Agg, by = c("Product" = "Product_Old")) %>%
+      select(-Product, Product = Product.y) %>%
+      mutate(Product = ifelse(Product == "Axi Credit 4 - paper", "Axi Credit 4"
+                              ,ifelse(Product == "?1 ????????????? ?? 2", "?1 ????????????? ??"
+                                      ,ifelse(Product == "?????? ?? ?? 4 ", "Axi Credit 4"
+                                              ,ifelse(Product == "?????? ?? ?? 4 - paper", "Axi Credit 4"
+                                                      , Product))))) %>%
+      mutate(Approved = ifelse(Product == "Axi Credit 2", "Approved loans principal",
+                               ifelse(Product == "Axi Credit 3","Approved loans principal",
+                                      ifelse(Product == "Axi Credit 4","Approved loans principal",
+                                             ifelse(Product == "A1 Credit 1","Approved loans principal",
+                                                    ifelse(Product == "A1 Credit 2","Approved loans principal",
+                                                           ifelse(Product == "?1 ????????????? ??? ??","Approved loans principal",
+                                                                  ifelse(Product == "?1 ????????????? ??","Approved loans principal", "Approved limit"    
+                                                                  )))))))) %>%
+      unite(VLookUPCondition, c(Product, Approved), sep = "-" ) %>%
+      group_by(VLookUPCondition, Date) %>%
+      summarise(SumLimit = sum(SumLimit)) %>%
+      dcast(VLookUPCondition ~ Date, value.var = "SumLimit")
+    
+    
+    Approved_Count_BG[is.na(Approved_Count_BG)] <- 0
+    Approved_Limit_BG[is.na(Approved_Limit_BG)] <- 0
+  }
+  
+  # Activated Clients  BG
+  {
+    Activated_BG = ActivatedCards_BG %>%
+      filter(Date != "31.12.9999") %>%
+      mutate(Date = dmy(Date)) %>%
+      left_join(Product_Agg, by = c("Product" = "Product_Old")) %>%
+      select(-Product, Product = Product.y) %>%
+      bind_rows(DummyActivatedCard) %>%
+      mutate(Date = as.Date(Date)) %>%
+      mutate(Activated = "Activated") %>%
+      unite(VLookUPCondition, c(Product, Activated), sep = "-" ) %>%
+      group_by(VLookUPCondition, Date) %>%
+      summarise(ActivatedClients = sum(ActivatedClients)) %>%
+      dcast(VLookUPCondition ~ Date, value.var = "ActivatedClients")
+    
+    
+    Activated_BG[is.na(Activated_BG)] <- 0
+  }
+  
+  # Utillized Amounts BG
+  {
+    UtilizedAmountCount_BG = UtillizedAMount_BG %>%
+      mutate(Date = as.Date(Date)) %>%
+      left_join(Product_Agg, by = c("Product" = "Product_Old")) %>%
+      select(-Product, Product = Product.y) %>%
+      mutate(TransactionChanel = ifelse(TransactionChanel == "ATM", "ATM (transactions)", TransactionChanel)) %>%
+      mutate(TransactionChanel = ifelse(TransactionChanel == "POS", "POS (transactions)", TransactionChanel)) %>%
+      mutate(TransactionChanel = ifelse(TransactionChanel == "ECOMM", "Online (transactions)", TransactionChanel)) %>%
+      unite(VLookUPCondition, c(Product, TransactionChanel), sep = "-" ) %>%
+      group_by(VLookUPCondition, Date) %>%
+      summarise(CountTransaction = sum(CountTransaction)) %>%
+      dcast(VLookUPCondition ~ Date , value.var = "CountTransaction")
+    
+    
+    ################################################################################################# 
+    
+    UtilizedAmountSUM_BG = UtillizedAMount_BG %>%
+      mutate(Date = as.Date(Date)) %>%
+      left_join(Product_Agg, by = c("Product" = "Product_Old")) %>%
+      select(-Product, Product = Product.y) %>%
+      mutate(TransactionChanel = ifelse(TransactionChanel == "ATM", "Utillized ATM", TransactionChanel)) %>%
+      mutate(TransactionChanel = ifelse(TransactionChanel == "POS", "Utillized POS", TransactionChanel)) %>%
+      mutate(TransactionChanel = ifelse(TransactionChanel == "ECOMM", "Utillized Online", TransactionChanel)) %>%
+      unite(VLookUPCondition, c(Product, TransactionChanel), sep = "-" ) %>%
+      group_by(VLookUPCondition, Date) %>%
+      summarise(Amount = sum(AmountReal)) %>%
+      dcast(VLookUPCondition ~ Date , value.var = "Amount")
+    
+    
+    UtilizedAmountCount_BG[is.na(UtilizedAmountCount_BG)] <- 0  
+    UtilizedAmountSUM_BG[is.na(UtilizedAmountSUM_BG)] <- 0  
+    
+  }
+  
+  # Payments Cards BG
+  {
+    
+    PaymentsSum_BG = PaymentsCards_BG %>%
+      #separate(Date, into = c("Year", "Month", "Day"), sep = "-" ) %>% 
+      #unite(Date, c(Day, Month, Year), sep = ".") %>%
+      mutate(Date = as.Date(Date)) %>%
+      left_join(Product_Agg, by = c("Product" = "Product_Old")) %>%
+      select(-Product, Product = Product.y) %>%
+      unite(VLookUPCondition, c(Product, Notes), sep = "-" ) %>%
+      group_by(VLookUPCondition, Date) %>%
+      summarise(Amount = sum(Amount)) %>%
+      dcast(VLookUPCondition ~ Date , value.var = "Amount")
+    
+    PaymentsSum_BG[is.na(PaymentsSum_BG)] <- 0 
+    
+    
+    ############################################################
+    
+    Winnigs_Reversal_Sum_BG = Winnigs_Reversal_BG %>%
+      #separate(Date, into = c("Year", "Month", "Day"), sep = "-" ) %>% 
+      #unite(Date, c(Day, Month, Year), sep = ".") %>%
+      mutate(Date = as.Date(Date)) %>%
+      left_join(Product_Agg, by = c("Product" = "Product_Old")) %>%
+      select(-Product, Product = Product.y) %>%
+      unite(VLookUPCondition, c(Product, Notes), sep = "-" ) %>%
+      group_by(VLookUPCondition, Date) %>%
+      summarise(Amount = sum(Amount)) %>%
+      dcast(VLookUPCondition ~ Date , value.var = "Amount")
+    
+    Winnigs_Reversal_Sum_BG[is.na(Winnigs_Reversal_Sum_BG)] <- 0 
+    
+    Paymets_BG_Cards_ALL = PaymentsSum_BG %>%
+      bind_rows(Winnigs_Reversal_Sum_BG)
+    
+    
+  }
+  
+  # CreditCards Charges BG
+  {
+    Cards_Charges_BG = CreditCardCharges_BG %>%
+      #separate(Date, into = c("Year", "Month", "Day"), sep = "-" ) %>% 
+      #unite(Date, c(Day, Month, Year), sep = ".") %>%
+      mutate(Date = as.Date(Date)) %>%
+      left_join(Product_Agg, by = c("Product" = "Product_Old")) %>%
+      select(-Product, Product = Product.y) %>%
+      mutate(Accural = ifelse(Amount < 0,'Discount Insurance', Accural)) %>%
+      mutate(Amount = ifelse(Accural == "Discount" & Amount > 0, (Amount * -1), Amount)) %>%
+      mutate(Amount = ifelse(Accural == 'Discount Insurance', (Amount * -1), Amount)) %>%
+      unite(VLookUPCondition, c(Product, Accural), sep = "-" ) %>%
+      group_by(VLookUPCondition, Date) %>%
+      summarise(Amount = sum(Amount)) %>%
+      dcast(VLookUPCondition ~ Date , value.var = "Amount")
+    
+    Cards_Charges_BG[is.na(Cards_Charges_BG)] <- 0  
+    
+  }
+  
+  # Credits Charges BG
+  {
+    Credits_Charges_BG = CreditsCharges_BG %>%
+      #separate(Date, into = c("Year", "Month", "Day"), sep = "-" ) %>% 
+      #unite(Date, c(Day, Month, Year), sep = ".") %>%
+      mutate(Date = as.Date(Date)) %>%
+      left_join(Product_Agg, by = c("Product" = "Product_Old")) %>%
+      select(-Product, Product = Product.y) %>%
+      unite(VLookUPCondition, c(Product, Accural), sep = "-" ) %>%
+      group_by(VLookUPCondition, Date) %>%
+      summarise(Amount = sum(Amount)) %>%
+      dcast(VLookUPCondition ~ Date , value.var = "Amount")
+    
+    Credits_Charges_BG[is.na(Credits_Charges_BG)] <- 0  
+    
+  }
+  
+  # Utillized Credits BG
+  {
+    
+    UtilliezdCredits_Count_BG = UtilliezdCredits_BG %>%
+      mutate(Date = as.Date(Date)) %>%
+      left_join(Product_Agg, by = c("Product" = "Product_Old")) %>%
+      select(-Product, Product = Product.y) %>%
+      mutate(Utilizedloans = "Utilized loans") %>%
+      mutate(Product = ifelse(Product == "Axi Credit 4 - paper", "Axi Credit 4"
+                              ,ifelse(Product == "?1 ????????????? ?? 2", "?1 ????????????? ??"
+                                      ,ifelse(Product == "?????? ?? ?? 4 ", "Axi Credit 4"
+                                              ,ifelse(Product == "?????? ?? ?? 4 - paper", "Axi Credit 4"
+                                                      , Product))))) %>%
+      #separate(Date, into = c("Year", "Month", "Day"), sep = "-" ) %>% 
+      #unite(Date, c(Day, Month, Year), sep = ".") %>%
+      unite(VLookUPCondition, c(Product, Utilizedloans), sep = "-" ) %>%
+      group_by(VLookUPCondition, Date) %>%
+      summarise(Count = sum(Count)) %>%
+      dcast(VLookUPCondition ~ Date , value.var = "Count")
+    
+    #/////////////////////////////////////////////////////////////////////  
+    
+    UtilliezdCredits_Limit_BG = UtilliezdCredits_BG %>%
+      mutate(Date = as.Date(Date)) %>%
+      left_join(Product_Agg, by = c("Product" = "Product_Old")) %>%
+      select(-Product, Product = Product.y) %>%
+      mutate(Utilizedamounts = "Utilized amounts") %>%
+      mutate(Product = ifelse(Product == "Axi Credit 4 - paper", "Axi Credit 4"
+                              ,ifelse(Product == "?1 ????????????? ?? 2", "?1 ????????????? ??"
+                                      ,ifelse(Product == "?????? ?? ?? 4 ", "Axi Credit 4"
+                                              ,ifelse(Product == "?????? ?? ?? 4 - paper", "Axi Credit 4"
+                                                      , Product))))) %>%
+      #separate(Date, into = c("Year", "Month", "Day"), sep = "-" ) %>% 
+      #unite(Date, c(Day, Month, Year), sep = ".") %>%
+      unite(VLookUPCondition, c(Product, Utilizedamounts), sep = "-" ) %>%
+      group_by(VLookUPCondition, Date) %>%
+      summarise(Limit = sum(Limit)) %>%
+      dcast(VLookUPCondition ~ Date , value.var = "Limit")
+    
+    UtilliezdCredits_Count_BG[is.na(UtilliezdCredits_Count_BG)] <- 0
+    UtilliezdCredits_Limit_BG[is.na(UtilliezdCredits_Limit_BG)] <- 0
+  }
+  
+  # Payments Credits BG
+  {
+    
+    CreditPayments_Sum_BG = CreditPayments_BG %>%
+      mutate(Date = as.Date(Date)) %>%
+      left_join(Product_Agg, by = c("Product" = "Product_Old")) %>%
+      select(-Product, Product = Product.y) %>%
+      mutate(Collected = "Collected") %>%
+      #separate(Date, into = c("Year", "Month", "Day"), sep = "-" ) %>% 
+      #unite(Date, c(Day, Month, Year), sep = ".") %>%
+      unite(VLookUPCondition, c(Product, Collected), sep = "-" ) %>%
+      group_by(VLookUPCondition, Date) %>%
+      summarise(Amount = sum(Amount)) %>%
+      dcast(VLookUPCondition ~ Date , value.var = "Amount")
+    
+    
+    CreditPayments_Sum_BG[is.na(CreditPayments_Sum_BG)] <- 0
+    
+    
+  }
+  
+  #CreditsBase
+  {
+    
+    
+    CreditBaseRDS_BG = readRDS("//cow.easycredit.bg/FileServer/White Card/BAR/R Scripts/Rscript_KPI_report_SQL/Input Data/CretitBase_RDS.rds") 
+    
+    CreditBaseRDS_MaxDate = max(CreditBaseRDS_BG$Date)
+    
+    
+    CreditBase_Current = CreditBase %>%
+      left_join(Product_Agg, by = c("Product" = "Product_Old")) %>%
+      select(-Product, Product = Product.y) %>%
+      group_by(Product, Status, Date) %>%
+      summarise(ContractNumber = length(ContractNumber)) 
+    
+    CreditBase_Current_Maxdate = max(CreditBase_Current$Date)
+    
+    
+    if (CreditBase_Current_Maxdate > CreditBaseRDS_MaxDate) {
+      
+      CretitBase_Bind = CreditBaseRDS_BG %>%
+        bind_rows(CreditBase_Current)
+      
+    }  else {
+      
+      CretitBase_Bind = CreditBaseRDS_BG
+      
+    }
+    
+    saveRDS(CretitBase_Bind, paste("//cow.easycredit.bg/FileServer/White Card/BAR/R Scripts/Rscript_KPI_report_SQL/BackUp_RDS/CreditBase_RDS/CretitBase_pivotBackUP",CurrentDate))
+    saveRDS(CretitBase_Bind, "//cow.easycredit.bg/FileServer/White Card/BAR/R Scripts/Rscript_KPI_report_SQL/Input Data/CretitBase_RDS.rds") 
+    
+    CretitBase_pivot = CretitBase_Bind %>%
+      left_join(Product_Agg, by = c("Product" = "Product_Old")) %>%
+      select(-Product, Product = Product.y) %>%
+      unite(VLookUPCondition, c(Product, Status), sep = "-" ) %>%
+      group_by(VLookUPCondition, Date) %>%
+      replace(is.na(.), 0) %>%
+      summarise(ContractNumber = sum(ContractNumber)) %>%
+      dcast(VLookUPCondition ~ Date, value.var = "ContractNumber")
+    
+    
+    
+    
+  }
+  
+  #Reading latestCard Report BG
+  {
+    
+    file_paths_BG <- list.files("//cow.easycredit.bg/FileServer/White Card/Reports BG/Card_Report_BG","csv",  full.names = T)
+    
+    new_files_BG = c()
+    
+    for (file_BG in file_paths_BG) {
+      file_date_BG = as.Date(
+        substr(file_BG, nchar(file_BG) - 13, nchar(file_BG)-4),
+        format = "%d.%m.%Y"
+      )
+      
+      
+      if (file_date_BG >= Today) {
+        new_files_BG = c(new_files_BG, file_BG)
+      }
+      
+    } 
+    
+    #file_paths_BG <- fs::dir_ls("./Input Data/CardReportBG")
+    #file_paths_BG[[1]]
+    
+    
+    #CardsReports_today_BG = tibble(File = file_paths_BG) %>%
+    #  mutate(Data = lapply(file_paths_BG, read.csv2)) %>% 
+    #  unnest(Data) %>%
+    CardsReports_today_BG = read.csv2(new_files_BG) %>%
+      #separate(File, c("Name", "Date_1"), "s_") %>%
+      #separate(Date_1,c("Date", "old"), ".csv") %>%
+      #mutate(Date = as.Date("2022-05-09")) %>%
+      mutate(Date = file_date_BG) %>%
+      mutate(Date = Date - as.difftime(1, unit="days")) %>%
+      mutate(Date = as.Date(Date)) %>%
+      select(Date, Product = "???????", Limit = "?????", TAD = "???????.??.??????????")%>%
+      mutate(Limit = as.numeric(Limit)) %>%
+      mutate(TAD = as.numeric(TAD)) %>%
+      #mutate(Date = as.factor(Date)) %>%
+      #mutate(Date = Date - as.difftime(1, unit="days")) %>%
+      #separate(Date, into = c("Year", "Month", "Date"), sep = "-" ) %>%
+      #unite(Date, c("Date", "Month", "Year"), sep = ".", remove = F) %>%
+      filter(TAD != "---------------------") %>%
+      mutate(Product = ifelse(Product == "AXI 2-500", "AXI 2",
+                              ifelse(Product == "Axi Card - test", "AXI 2",
+                                     ifelse(Product == "Visa Free ATM World", "WhiteCard",
+                                            ifelse(Product == "Visa ???? ?????", "WhiteCard",
+                                                   ifelse(Product == "???? ?????", "WhiteCard",
+                                                          ifelse(Product == "???? ????? Test", "WhiteCard",
+                                                                 ifelse(Product == "???", "WhiteCard",
+                                                                        ifelse(Product == "???? ????? ? ???? ?????", "WhiteCard only interest",
+                                                                               ifelse(Product == "Visa ???? ????? - SC", "WhiteCard",
+                                                                                      ifelse(Product == "???? ????? Gold-MFG-5%", "WhiteCard-Gold",
+                                                                                             ifelse(Product == "???? ????? Gold - 5%", "WhiteCard-Gold", 
+                                                                                                    ifelse(Product == "???? ????? Gold - 10%", "WhiteCard-Gold",
+                                                                                                           ifelse(Product == "A1 - 8.5%", "A1",
+                                                                                                                  ifelse(Product == "???? ????? 2", "WhiteCard"
+                                                                                                                         ,Product))))))))))))))) %>%
+      #mutate(Date = as.Date(Date, format = "%d.%m.%Y")) %>%
+      select(Date,Product, Limit, TAD) %>%
+      left_join(Product_Agg, by = c("Product" = "Product_Old")) %>%
+      select(-Product, Product = Product.y)
+    
+    
+    CardReportBGMaxDate = max(CardsReports_today_BG$Date)   
+    
+    
+    
+    CardReportRDS_BG = readRDS("//cow.easycredit.bg/FileServer/White Card/BAR/R Scripts/Rscript_KPI_report_SQL/Input Data/CardReportRDS_BG_3.rds") %>%
+      mutate(Date = as.Date(Date)) %>%
+      left_join(Product_Agg, by = c("Product" = "Product_Old")) %>%
+      select(-Product, Product = Product.y)
+    #filter(Date > "2023-01-01")
+    #CardReportRDS_BG = readRDS("./BackUp_RDS/CardReport_RDS/CardReportRDS_BG_BackUp 06.02.2023_08.32.rds")%>%
+    #mutate(Date = as.Date(Date))
+    
+    #CardReportRDS_BG = CardReportRDS_BG  %>%
+    # filter(Date >= "2023-01-01")
+    
+    CardReportBind_BG_MaxDate = max(CardReportRDS_BG$Date)    
+    
+    if(CardReportBGMaxDate > CardReportBind_BG_MaxDate)
+    {
+      CardReportBind_BG = CardsReports_today_BG %>%
+        bind_rows(CardReportRDS_BG) %>%
+        #mutate(Date = as.Date(Date, format= "%d.%m.%Y")) %>%
+        filter(Date >= "2023-01-01") %>%
+        #separate(Date, into = c("Year", "Month", "Date")) %>%
+        #unite(Date, c(Date,Month,Year), sep = ".") %>%
+        mutate(Count = 1)
+    } else {
+      
+      CardReportBind_BG = CardReportRDS_BG %>%
+        filter(Date >= '2023-01-01')
+    }
+    
+    
+    saveRDS(CardReportBind_BG, "//cow.easycredit.bg/FileServer/White Card/BAR/R Scripts/Rscript_KPI_report_SQL/Input Data/CardReportRDS_BG_3.rds")
+    saveRDS(CardReportBind_BG, paste("//cow.easycredit.bg/FileServer/White Card/BAR/R Scripts/Rscript_KPI_report_SQL/BackUp_RDS/CardReport_RDS/CardReportRDS_BG_BackUp",CurrentDate))
+    
+    #Pivots
+    {
+      CardReport_pivotLimit_BG = CardReportBind_BG %>%
+        # filter(Product == c("AXI 2", "WhiteCard", "WhiteCard only interest", "WhiteCard-Gold")) %>%
+        select(Date, Product, Limit) %>%
+        mutate(`Total approved limit` = "Total approved limit") %>%
+        unite(VLookUPCondition, c(Product, `Total approved limit`), sep = "-" ) %>%
+        group_by(VLookUPCondition, Date) %>%
+        summarise(`Limit` = sum(`Limit`)) %>%
+        dcast(`VLookUPCondition`  ~  Date, value.var = "Limit") %>%
+        filter(VLookUPCondition %in% c("A1-Total approved limit"
+                                       , "AXI 2-Total approved limit"
+                                       , "WhiteCard-Gold-Total approved limit"
+                                       , "WhiteCard-Total approved limit"
+                                       , "WhiteCard only interest-Total approved limit"))
+      #filter(VLookUPCondition != c(	"--------Total approved limit", "1-Total approved limit", "2-Total approved limit", "3-Total approved limit"))
+      
+      CardReport_pivotTAD_BG = CardReportBind_BG %>%
+        #filter(Product == c("AXI 2", "WhiteCard", "WhiteCard only interest", "WhiteCard-Gold")) %>%
+        select(Date, Product, TAD) %>%
+        mutate(`Total due to reset` = "Total due to reset") %>%
+        unite(VLookUPCondition, c(Product, `Total due to reset`), sep = "-" ) %>%
+        group_by(VLookUPCondition, Date) %>%
+        summarise(`TAD` = sum(`TAD`)) %>%
+        dcast(`VLookUPCondition`  ~  Date, value.var = "TAD") %>%
+        filter(VLookUPCondition %in% c("A1-Total due to reset"
+                                       , "AXI 2-Total due to reset"
+                                       , "WhiteCard-Gold-Total due to reset"
+                                       , "WhiteCard-Total due to reset"
+                                       , "WhiteCard only interest-Total due to reset"))
+      #filter(VLookUPCondition != c("--------Total due to reset", "1-Total due to reset", "2-Total due to reset", "3-Total due to reset"))
+      
+      
+      CardReport_pivotTCount_BG = CardReportBind_BG %>%
+        #filter(Product == c("AXI 2", "WhiteCard", "WhiteCard only interest", "WhiteCard-Gold")) %>%
+        select(Date, Product, Count) %>%
+        mutate(`New Base` = "New Base") %>%
+        unite(VLookUPCondition, c(Product, `New Base`), sep = "-" ) %>%
+        group_by(VLookUPCondition, Date) %>%
+        summarise(`Count` = sum(`Count`)) %>%
+        dcast(`VLookUPCondition`  ~  Date, value.var = "Count") %>%
+        filter(VLookUPCondition %in% c("A1-New Base"
+                                       , "AXI 2-New Base"
+                                       , "WhiteCard-Gold-New Base"
+                                       , "WhiteCard-New Base"
+                                       , "WhiteCard only interest-New Base"))
+      #filter(VLookUPCondition != c("--------Total due to reset", "1-New Base", "2-New Base", "3-New Base"))
+    }
+    
+  }
+  
+  #Closed Cards BG
+  {
+    ClosedCards_Count_BG = ClosedCards_BG %>%
+      mutate(Date = as.Date(Date)) %>%
+      left_join(Product_Agg, by = c("Product" = "Product_Old")) %>%
+      select(-Product, Product = Product.y) %>%
+      bind_rows(DummyClosedCards) %>%
+      mutate(Product) %>%
+      unite(VLookUPCondition, c(Product, CloseReason), sep = "-" ) %>%
+      group_by(VLookUPCondition, Date) %>%
+      summarise(Count = sum(Count)) %>%
+      dcast(VLookUPCondition ~ Date , value.var = "Count")
+    
+    ClosedCards_Count_BG[is.na(ClosedCards_Count_BG)] <- 0  
+    
+  }
+  
+  # Writing XLSX BG
+  ExcellFile_BG <- list("Approved Count BG" = Approved_Count_BG, "Approved Limit BG" = Approved_Limit_BG, "Activated BG" = Activated_BG,
+                        "Utillized Cards_Count  BG" = UtilizedAmountCount_BG, "Utillized Cards_Sum BG" = UtilizedAmountSUM_BG,
+                        "Payments Cards BG" = Paymets_BG_Cards_ALL, "Cards Charges BG" = Cards_Charges_BG, "Credits Charges BG" = Credits_Charges_BG,
+                        "Closed Cards BG" = ClosedCards_Count_BG, "Utillized Credits_Count BG" = UtilliezdCredits_Count_BG,
+                        "Utillized Credits_Limit" = UtilliezdCredits_Limit_BG, "Payments Credits BG" = CreditPayments_Sum_BG,
+                        "Total approved limit" = CardReport_pivotLimit_BG, "Total due to reset" = CardReport_pivotTAD_BG,
+                        "New Base" = CardReport_pivotTCount_BG, "Credit_Base" = CretitBase_pivot, "HideColmn" = Dates_DF_HideColumn )
+  
+  #(ExcellFile_BG,"./Output Data/KPI_Report_BG.xlsx")
+  write_xlsx(ExcellFile_BG, paste0("//cow.easycredit.bg/FileServer/White Card/BAR/R Scripts/Rscript_KPI_report_SQL/Output Data/KPI_Report_BG_"
+                                   ,Date_For_file,".xlsx"))
+  
+  
+  
+}
+
+#Poland R-revision!
+{
+  # Approved Clients PL
+  {
+    Approved_Count_PL = AppCards_PL_WPC %>%
+      filter(Date != "31.12.9999") %>%
+      filter(Product != "Axi test 2") %>%
+      left_join(Product_Agg, by = c("Product" = "Product_Old")) %>%
+      select(-Product, Product = Product.y) %>%
+      group_by(Product, Date) %>%
+      summarise(ApprovedClients = sum(ApprovedClients)
+                ,SumLimit = sum(SumLimit)) %>%
+      left_join(AppCards_PL_RA, by = c("Date" = "Date_RA")) %>%
+      left_join(AppCards_PL_DA,  by = c("Date" = "Date_DA")) %>%
+      mutate(across(everything(), ~replace_na(.x, 0))) %>%
+      filter(duplicated(Date) == FALSE) %>%
+      mutate(RealApproved = ApprovedClients + ApprovedClients_DA + ApprovedClients_RA) %>%
+      mutate(Approved =  "Approved") %>%
+      mutate(Date = dmy(Date)) %>%
+      unite(VLookUPCondition, c(Product, Approved), sep = "-" ) %>%
+      group_by(VLookUPCondition, Date) %>%
+      summarise(RealApproved = sum(RealApproved)) %>%
+      dcast(VLookUPCondition ~ Date, value.var = "RealApproved")
+    
+    
+    ####################################################################
+    Approved_Limit_PL = AppCards_PL_WPC %>%
+      filter(Date != "31.12.9999") %>%
+      filter(Product != "Axi test 2") %>%
+      left_join(Product_Agg, by = c("Product" = "Product_Old")) %>%
+      select(-Product, Product = Product.y) %>%
+      group_by(Product, Date) %>%
+      summarise(ApprovedClients = sum(ApprovedClients)
+                ,SumLimit = sum(SumLimit)) %>%
+      left_join(AppCards_PL_RA, by = c("Date" = "Date_RA")) %>%
+      left_join(AppCards_PL_DA,  by = c("Date" = "Date_DA")) %>%
+      mutate(across(everything(), ~replace_na(.x, 0))) %>%
+      filter(duplicated(Date) == FALSE) %>%
+      mutate(RealLimit = SumLimit + SumLimit_DA + SumLimit_RA)%>%
+      mutate(Approvedlimits =  "Approved limits") %>%
+      mutate(Date = dmy(Date)) %>%
+      unite(VLookUPCondition, c(Product, Approvedlimits), sep = "-" ) %>%
+      group_by(VLookUPCondition, Date) %>%
+      summarise(RealLimit = sum(RealLimit)) %>%
+      dcast(VLookUPCondition ~ Date, value.var = "RealLimit")
+    
+    Approved_Count_limit_PL = Approved_Count_PL %>%
+      bind_rows(Approved_Limit_PL)
+    
+  }
+  
+  # Activated Clients  PL
+  {
+    Activated_Count_PL = ActivatedCards_PL %>%
+      filter(Date != "31.12.9999") %>%
+      left_join(Product_Agg, by = c("Product" = "Product_Old")) %>%
+      select(-Product, Product = Product.y) %>%
+      mutate(across(everything(), ~replace_na(.x, 0))) %>%
+      mutate(Date = dmy(Date)) %>%
+      bind_rows(DummyActivatedCard) %>%
+      mutate(Date = as.Date(Date)) %>%
+      mutate(Activated = "Activated") %>%
+      unite(VLookUPCondition, c(Product, Activated), sep = "-" ) %>%
+      group_by(VLookUPCondition, Date) %>%
+      summarise(ActivatedClients = sum(ActivatedClients)) %>%
+      dcast(VLookUPCondition ~ Date, value.var = "ActivatedClients")
+    ####################################################################
+    
+    Activated_limit_PL = ActivatedCards_PL %>%
+      filter(Date != "31.12.9999") %>%
+      left_join(Product_Agg, by = c("Product" = "Product_Old")) %>%
+      select(-Product, Product = Product.y) %>%
+      mutate(across(everything(), ~replace_na(.x, 0))) %>%
+      mutate(Date = dmy(Date)) %>%
+      bind_rows(DummyActivatedCard) %>%
+      mutate(Date = as.Date(Date)) %>%
+      mutate(Activatedlimit = "Activated limit") %>%
+      unite(VLookUPCondition, c(Product, Activatedlimit), sep = "-" ) %>%
+      group_by(VLookUPCondition, Date) %>%
+      summarise(ActivatedLimit = sum(ActivatedLimit)) %>%
+      dcast(VLookUPCondition ~ Date, value.var = "ActivatedLimit") 
+    
+    
+    Activated_Count_limit_PL = Activated_Count_PL %>%
+      bind_rows(Activated_limit_PL)
+    
+    
+  }
+  
+  # Utillized Amounts PL
+  {
+    UtilizedAmountCount_PL = UtillizedAMount_PL %>%
+      mutate(Date = as.Date(Date)) %>%
+      left_join(Product_Agg, by = c("Product" = "Product_Old")) %>%
+      select(-Product, Product = Product.y) %>%
+      mutate(TransactionChanel = ifelse(TransactionChanel == "ATM", "ATM (transactions)", TransactionChanel)) %>%
+      mutate(TransactionChanel = ifelse(TransactionChanel == "POS", "POS (transactions)", TransactionChanel)) %>%
+      mutate(TransactionChanel = ifelse(TransactionChanel == "ECOMM", "Online (transactions)", TransactionChanel)) %>%
+      unite(VLookUPCondition, c(Product, TransactionChanel), sep = "-" ) %>%
+      group_by(VLookUPCondition, Date) %>%
+      summarise(CountTransaction = sum(CountTransaction)) %>%
+      dcast(VLookUPCondition ~ Date , value.var = "CountTransaction")
+    
+    
+    ################################################################################################# 
+    
+    UtilizedAmountSUM_PL = UtillizedAMount_PL %>%
+      mutate(Date = as.Date(Date)) %>%
+      left_join(Product_Agg, by = c("Product" = "Product_Old")) %>%
+      select(-Product, Product = Product.y) %>%
+      mutate(TransactionChanel = ifelse(TransactionChanel == "ATM", "ATM (sum)", TransactionChanel)) %>%
+      mutate(TransactionChanel = ifelse(TransactionChanel == "POS", "POS (sum)", TransactionChanel)) %>%
+      mutate(TransactionChanel = ifelse(TransactionChanel == "ECOMM", "Online (sum)", TransactionChanel)) %>%
+      unite(VLookUPCondition, c(Product, TransactionChanel), sep = "-" ) %>%
+      group_by(VLookUPCondition, Date) %>%
+      summarise(Amount = sum(Amount)) %>%
+      dcast(VLookUPCondition ~ Date , value.var = "Amount")
+    
+    #FastCash
+    FastCash_PL_Amount = read_excel("//canova.smartitbg.int/PBI Files2/Poland_FastCash/CID - discount 2023.xlsx") %>%
+      select(Date = `Money transfer date`, Amount = `Transfer amount`) %>%
+      mutate(Amount = as.numeric(Amount)
+             ,Product = "AXI PL"
+             ,TransactionChanel = "FastCash(sum)") %>%
+      unite(VLookUPCondition, c(Product, TransactionChanel), sep = "-" ) %>%
+      group_by(VLookUPCondition, Date) %>%
+      summarise(Amount = sum(Amount)) %>%
+      dcast(VLookUPCondition ~ Date , value.var = "Amount")
+    
+    #######################################################################
+    
+    FastCash_PL_Count = read_excel("//canova.smartitbg.int/PBI Files2/Poland_FastCash/CID - discount 2023.xlsx") %>%
+      select( Date = `Money transfer date`, Amount = `Transfer amount`) %>%
+      mutate(Amount = as.numeric(Amount)
+             ,Product = "AXI PL"
+             ,TransactionChanel = "FastCash(transactions)") %>%
+      unite(VLookUPCondition, c(Product, TransactionChanel), sep = "-" ) %>%
+      group_by(VLookUPCondition, Date) %>%
+      summarise(Amount = length(Amount)) %>%
+      dcast(VLookUPCondition ~ Date , value.var = "Amount")
+    
+    
+    Utilized_Count_Amount_PL = UtilizedAmountCount_PL %>%
+      bind_rows(UtilizedAmountSUM_PL
+                ,FastCash_PL_Amount
+                ,FastCash_PL_Count) %>%
+      mutate(across(everything(), ~replace_na(.x, 0))) 
+    
+    
+  }
+  
+  # Payments Cards PL
+  {
+    
+    PaymentsSum_PL = PaymentsCards_PL %>%
+      #separate(Date, into = c("Year", "Month", "Day"), sep = "-" ) %>% 
+      #unite(Date, c(Day, Month, Year), sep = ".") %>%
+      mutate(across(everything(), ~replace_na(.x, 0))) %>%
+      mutate(Date = as.Date(Date)) %>%
+      left_join(Product_Agg, by = c("Product" = "Product_Old")) %>%
+      select(-Product, Product = Product.y) %>%
+      #mutate(Totalcollected = "Total collected") %>%
+      unite(VLookUPCondition, c(Product, Notes), sep = "-" ) %>%
+      group_by(VLookUPCondition, Date) %>%
+      summarise(Amount = sum(Amount)) %>%
+      dcast(VLookUPCondition ~ Date , value.var = "Amount")
+    
+    PaymentsSum_PL[is.na(PaymentsSum_PL)] <- 0 
+    
+    ##################################################################
+    
+    Winnigs_Reversal_Sum_PL = Winnigs_Reversal_PL %>%
+      #separate(Date, into = c("Year", "Month", "Day"), sep = "-" ) %>% 
+      #unite(Date, c(Day, Month, Year), sep = ".") %>%
+      mutate(Date = as.Date(Date)) %>%
+      left_join(Product_Agg, by = c("Product" = "Product_Old")) %>%
+      select(-Product, Product = Product.y) %>%
+      unite(VLookUPCondition, c(Product, Notes), sep = "-" ) %>%
+      group_by(VLookUPCondition, Date) %>%
+      summarise(Amount = sum(Amount)) %>%
+      dcast(VLookUPCondition ~ Date , value.var = "Amount")
+    
+    Winnigs_Reversal_Sum_PL[is.na(Winnigs_Reversal_Sum_PL)] <- 0 
+    
+    Payments_PL_All = PaymentsSum_PL %>%
+      bind_rows(Winnigs_Reversal_Sum_PL)
+    
+  }
+  
+  # CreditCards Charges PL
+  {
+    Cards_Charges_PL = CreditCardCharges_PL %>%
+      filter(Product != "Axi test 2") %>%
+      filter(Product != "Axi test") %>%
+      left_join(Product_Agg, by = c("Product" = "Product_Old")) %>%
+      select(-Product, Product = Product.y) %>%
+      #separate(Date, into = c("Year", "Month", "Day"), sep = "-" ) %>% 
+      #unite(Date, c(Day, Month, Year), sep = ".") %>%
+      mutate(Amount = ifelse(Accural == "Discount" & Amount > 0, (Amount * -1), Amount)) %>%
+      mutate(Date = as.Date(Date)) %>%
+      unite(VLookUPCondition, c(Product, Accural), sep = "-" ) %>%
+      group_by(VLookUPCondition, Date) %>%
+      summarise(Amount = sum(Amount)) %>%
+      dcast(VLookUPCondition ~ Date , value.var = "Amount") %>%
+      mutate(across(everything(), ~replace_na(.x, 0))) 
+    
+    
+    
+  }
+  
+  
+  #Latest CardReport PL
+  {
+    
+    
+    
+    file_paths_PL <- list.files("//cow.easycredit.bg/FileServer/White Card/International/Poland/Reports/Cards","csv",  full.names = T)
+    
+    
+    new_files_PL = c()
+    
+    for (file_PL in file_paths_PL) {
+      file_date_BG = as.Date(
+        substr(file_PL, nchar(file_PL) - 13, nchar(file_PL)-4),
+        format = "%d.%m.%Y"
+      )
+      
+      
+      if (file_date_BG >= Today) {
+        new_files_PL = c(new_files_PL, file_PL)
+      }
+    } 
+    
+    
+    
+    #file_paths_PL <- fs::dir_ls("./Input Data/CardReportPL")
+    #file_paths_PL[[1]]
+    
+    # CardsReports_today_PL = tibble(File = file_paths_PL) %>%
+    #  mutate(Data = lapply(file_paths_PL, read.csv2)) %>%
+    # unnest(Data) %>%
+    CardsReports_today_PL = read.csv2(new_files_PL) %>%
+      #separate(File, c("Name", "Date_1"), "s_") %>%
+      #separate(Date_1,c("Date", "old"), ".csv") %>%
+      #mutate(Date = as.Date("2022-05-08")) %>%
+      mutate(Date = file_date_BG) %>%
+      mutate(Date = Date - as.difftime(1, unit="days")) %>%
+      select(Date, Product, Limit, TAD = "Total.due.to.reset") %>%
+      left_join(Product_Agg, by = c("Product" = "Product_Old")) %>%
+      select(-Product, Product = Product.y) %>%
+      mutate(Limit = as.numeric(Limit)) %>%
+      mutate(TAD = as.numeric(TAD)) %>%
+      #mutate(Date = as.factor(Date)) %>%
+      #mutate(Date = as.Date(Date, format = "%d.%m.%Y") - as.difftime(1, unit="days")) %>%
+      #separate(Date, into = c("Year", "Month", "Date"), sep = "-" ) %>%
+      #unite(Date, c("Date", "Month", "Year"), sep = ".", remove = F) %>%
+      filter(TAD != "---------------------") %>%
+      mutate(Product = ifelse(Product == "Axi Card PL", "AXI PL",
+                              ifelse(Product == "Axi test", "AXI PL",
+                                     ifelse(Product == "Axi test 2", "AXI PL", 
+                                            ifelse(Product == "Axi Card PL 2", "AXI PL",
+                                                   ifelse(Product == "Axi Card PL 3 ST", "AXI PL",Product)))))) %>%
+      #mutate(Date = as.Date(Date, format = "%d.%m.%Y")) %>%
+      select(Date,Product, Limit, TAD)
+    
+    CardReportPLMaxDate = max(CardsReports_today_PL$Date)   
+    
+    CardReportRDS_PL = readRDS("//cow.easycredit.bg/FileServer/White Card/BAR/R Scripts/Rscript_KPI_report_SQL/Input Data/CardReportRDS_PL.rds")%>%
+      mutate(Date = as.Date(Date))
+    #CardReportRDS_PL = readRDS("./BackUp_RDS/CardReport_RDS/CardReportRDS_PL_BackUp 21.12.2022_08.30.rds")
+    
+    CardReportBind_PL_MaxDate = max(CardReportRDS_PL$Date)     
+    
+    if(CardReportPLMaxDate > CardReportBind_PL_MaxDate)
+    { 
+      CardReportBind_PL = CardsReports_today_PL %>%
+        bind_rows(CardReportRDS_PL) %>%
+        #mutate(Date = as.Date(Date, format= "%d.%m.%Y")) %>%
+        filter(Date >= "2022-03-01") %>%
+        #separate(Date, into = c("Year", "Month", "Date")) %>%
+        #unite(Date, c(Date,Month,Year), sep = ".") %>%
+        mutate(Count = 1)
+    }  else {
+      
+      CardReportBind_PL = CardReportRDS_PL
+    }
+    
+    
+    saveRDS(CardReportBind_PL, "//cow.easycredit.bg/FileServer/White Card/BAR/R Scripts/Rscript_KPI_report_SQL/Input Data/CardReportRDS_PL.rds")
+    saveRDS(CardReportBind_PL, paste("//cow.easycredit.bg/FileServer/White Card/BAR/R Scripts/Rscript_KPI_report_SQL/BackUp_RDS/CardReport_RDS/CardReportRDS_PL_BackUp", CurrentDate))
+    
+    
+    
+    #Pivots
+    {
+      CardReport_pivotLimit_PL = CardReportBind_PL %>%
+        select(Date, Product, Limit) %>%
+        mutate(`Approved limits` = "Approved limits") %>%
+        unite(VLookUPCondition, c(Product, `Approved limits`), sep = "-" ) %>%
+        group_by(VLookUPCondition, Date) %>%
+        summarise(`Limit` = sum(`Limit`)) %>%
+        dcast(`VLookUPCondition`  ~  Date, value.var = "Limit")
+      
+      CardReport_pivotTAD_PL = CardReportBind_PL %>%
+        select(Date, Product, TAD) %>%
+        mutate(`Outstanding balance` = "Outstanding balance") %>%
+        unite(VLookUPCondition, c(Product, `Outstanding balance`), sep = "-" ) %>%
+        group_by(VLookUPCondition, Date) %>%
+        summarise(`TAD` = sum(`TAD`)) %>%
+        dcast(`VLookUPCondition`  ~  Date, value.var = "TAD")
+      
+      CardReport_pivotTCount_PL = CardReportBind_PL %>%
+        select(Date, Product, Count) %>%
+        mutate(`New Base` = "New Base") %>%
+        unite(VLookUPCondition, c(Product, `New Base`), sep = "-" ) %>%
+        group_by(VLookUPCondition, Date) %>%
+        summarise(`Count` = sum(`Count`)) %>%
+        dcast(`VLookUPCondition`  ~  Date, value.var = "Count")
+      
+      PolandCardReportPivotBIND = CardReport_pivotLimit_PL %>%
+        bind_rows(CardReport_pivotTAD_PL, CardReport_pivotTCount_PL) %>%
+        drop_na()
+    }
+    
+    
+  }
+  
+  
+  # Closed Cards PL
+  {
+    ClosedCards_Count_PL = ClosedCards_PL %>%
+      mutate(Date = as.Date(Date)) %>%
+      left_join(Product_Agg, by = c("Product" = "Product_Old")) %>%
+      select(-Product, Product = Product.y) %>%
+      bind_rows(DummyClosedCards) %>%
+      mutate(Date = as.Date(Date)) %>%
+      unite(VLookUPCondition, c(Product, CloseReason), sep = "-" ) %>%
+      group_by(VLookUPCondition, Date) %>%
+      summarise(Count = sum(Count)) %>%
+      dcast(VLookUPCondition ~ Date , value.var = "Count")
+    
+    ClosedCards_Count_PL[is.na(ClosedCards_Count_PL)] <- 0  
+  }
+  
+  
+  # Writing XLSX PL
+  ExcellFile_PL <- list("Approved_Count_limit_PL" = Approved_Count_limit_PL, "Activated_Count_limit_PL" = Activated_Count_limit_PL,
+                        "Utilized_Count_Amount_PL" = Utilized_Count_Amount_PL,"PaymentsSum_PL" = Payments_PL_All, 
+                        "Cards_Charges_PL" = Cards_Charges_PL, "ClosedCards_Count_PL" = ClosedCards_Count_PL, 
+                        "CardsReportInfo" = PolandCardReportPivotBIND, "HideColmn" = Dates_DF_HideColumn)
+  
+  write_xlsx(ExcellFile_PL, paste0("//cow.easycredit.bg/FileServer/White Card/BAR/R Scripts/Rscript_KPI_report_SQL/Output Data/KPI_Report_PL_"
+                                   ,Date_For_file,".xlsx"))
+  
+}
+
+#Romania R-revision!
+{
+  
+  # Approved Clients RO
+  {
+    Approved_Count_RO = AppCards_RO %>%
+      filter(Date != "31.12.9999") %>%
+      mutate(Date = dmy(Date)) %>%
+      left_join(Product_Agg, by = c("Product" = "Product_Old")) %>%
+      select(-Product, Product = Product.y) %>%
+      bind_rows(DummyApprovedCard) %>%
+      mutate(Approved = "Approved") %>%
+      unite(VLookUPCondition, c(Product, Approved), sep = "-" ) %>%
+      group_by(VLookUPCondition, Date) %>%
+      summarise(ApprovedClients = sum(ApprovedClients)) %>%
+      dcast(VLookUPCondition ~ Date, value.var = "ApprovedClients") %>%
+      mutate(across(everything(), ~replace_na(.x, 0)))
+    
+    ####################################################################
+    Approved_Limit_RO = AppCards_RO %>%
+      filter(Date != "31.12.9999") %>%
+      mutate(Date = dmy(Date)) %>%
+      left_join(Product_Agg, by = c("Product" = "Product_Old")) %>%
+      select(-Product, Product = Product.y) %>%
+      bind_rows(DummyApprovedCard) %>%
+      mutate(Approved = "Approved limits") %>%
+      unite(VLookUPCondition, c(Product, Approved), sep = "-" ) %>%
+      group_by(VLookUPCondition, Date) %>%
+      summarise(SumLimit = sum(SumLimit)) %>%
+      dcast(VLookUPCondition ~ Date, value.var = "SumLimit") %>%
+      mutate(across(everything(), ~replace_na(.x, 0)))
+    
+    
+    Approved_Count_limit_RO = Approved_Count_RO %>%
+      bind_rows(Approved_Limit_RO)
+    
+  }
+  
+  # Activated Clients  RO
+  {
+    Activated_Count_RO = ActivatedCards_RO %>%
+      filter(Date != "31.12.9999") %>%
+      mutate(across(everything(), ~replace_na(.x, 0))) %>%
+      mutate(Date = dmy(Date)) %>%
+      left_join(Product_Agg, by = c("Product" = "Product_Old")) %>%
+      select(-Product, Product = Product.y) %>%
+      bind_rows(DummyActivatedCard) %>%
+      mutate(Activated = "Activated") %>%
+      unite(VLookUPCondition, c(Product, Activated), sep = "-" ) %>%
+      group_by(VLookUPCondition, Date) %>%
+      summarise(ActivatedClients = sum(ActivatedClients)) %>%
+      dcast(VLookUPCondition ~ Date, value.var = "ActivatedClients")
+    #/////////////////////////////////////////////////////////////////////
+    
+    Activated_limit_RO = ActivatedCards_RO %>%
+      filter(Date != "31.12.9999") %>%
+      mutate(across(everything(), ~replace_na(.x, 0))) %>%
+      mutate(Date = dmy(Date)) %>%
+      left_join(Product_Agg, by = c("Product" = "Product_Old")) %>%
+      select(-Product, Product = Product.y) %>%
+      bind_rows(DummyActivatedCard) %>%
+      mutate(Activatedlimit = "Activated limit") %>%
+      unite(VLookUPCondition, c(Product, Activatedlimit), sep = "-" ) %>%
+      group_by(VLookUPCondition, Date) %>%
+      summarise(ActivatedLimit = sum(ActivatedLimit)) %>%
+      dcast(VLookUPCondition ~ Date, value.var = "ActivatedLimit") 
+    
+    
+    Activated_Count_limit_RO = Activated_Count_RO %>%
+      bind_rows(Activated_limit_RO)
+    
+    
+  }
+  
+  # Utillized Amounts RO
+  {
+    UtilizedAmountCount_RO = UtillizedAMount_RO %>%
+      mutate(Date = as.Date(Date)) %>%
+      left_join(Product_Agg, by = c("Product" = "Product_Old")) %>%
+      select(-Product, Product = Product.y) %>%
+      mutate(TransactionChanel = ifelse(TransactionChanel == "ATM", "ATM (transactions)", TransactionChanel)) %>%
+      mutate(TransactionChanel = ifelse(TransactionChanel == "POS", "POS (transactions)", TransactionChanel)) %>%
+      mutate(TransactionChanel = ifelse(TransactionChanel == "ECOMM", "Online (transactions)", TransactionChanel)) %>%
+      unite(VLookUPCondition, c(Product, TransactionChanel), sep = "-" ) %>%
+      group_by(VLookUPCondition, Date) %>%
+      summarise(CountTransaction = sum(CountTransaction)) %>%
+      dcast(VLookUPCondition ~ Date , value.var = "CountTransaction")
+    
+    
+    ################################################################################################# 
+    
+    UtilizedAmountSUM_RO = UtillizedAMount_RO %>%
+      mutate(Date = as.Date(Date)) %>%
+      left_join(Product_Agg, by = c("Product" = "Product_Old")) %>%
+      select(-Product, Product = Product.y) %>%
+      mutate(TransactionChanel = ifelse(TransactionChanel == "ATM", "ATM (sum)", TransactionChanel)) %>%
+      mutate(TransactionChanel = ifelse(TransactionChanel == "POS", "POS (sum)", TransactionChanel)) %>%
+      mutate(TransactionChanel = ifelse(TransactionChanel == "ECOMM", "Online (sum)", TransactionChanel)) %>%
+      unite(VLookUPCondition, c(Product, TransactionChanel), sep = "-" ) %>%
+      group_by(VLookUPCondition, Date) %>%
+      summarise(Amount = sum(Amount)) %>%
+      dcast(VLookUPCondition ~ Date , value.var = "Amount")
+    
+    
+    Utilized_Count_Amount_RO = UtilizedAmountCount_RO %>%
+      bind_rows(UtilizedAmountSUM_RO)
+    
+    
+  }
+  
+  # Payments Cards RO
+  {
+    
+    PaymentsSum_RO = PaymentsCards_RO %>%
+      # separate(Date, into = c("Year", "Month", "Day"), sep = "-" ) %>% 
+      #unite(Date, c(Day, Month, Year), sep = ".") %>%
+      mutate(Date = as.Date(Date)) %>%
+      left_join(Product_Agg, by = c("Product" = "Product_Old")) %>%
+      select(-Product, Product = Product.y) %>%
+      unite(VLookUPCondition, c(Product, Notes), sep = "-" ) %>%
+      group_by(VLookUPCondition, Date) %>%
+      summarise(Amount = sum(Amount)) %>%
+      dcast(VLookUPCondition ~ Date , value.var = "Amount") %>%
+      mutate(across(everything(), ~replace_na(.x, 0)))
+    #########################################################
+    
+    Winnigs_Reversal_Sum_RO = Winnigs_Reversal_RO %>%
+      #separate(Date, into = c("Year", "Month", "Day"), sep = "-" ) %>% 
+      #unite(Date, c(Day, Month, Year), sep = ".") %>%
+      mutate(Date = as.Date(Date)) %>%
+      left_join(Product_Agg, by = c("Product" = "Product_Old")) %>%
+      select(-Product, Product = Product.y) %>%
+      unite(VLookUPCondition, c(Product, Notes), sep = "-" ) %>%
+      group_by(VLookUPCondition, Date) %>%
+      summarise(Amount = sum(Amount)) %>%
+      dcast(VLookUPCondition ~ Date , value.var = "Amount")
+    
+    Winnigs_Reversal_Sum_RO[is.na(Winnigs_Reversal_Sum_RO)] <- 0 
+    
+    Payments_RO_All = PaymentsSum_RO %>%
+      bind_rows(Winnigs_Reversal_Sum_RO)
+    
+  }
+  
+  # CreditCards Charges RO
+  {
+    Cards_Charges_RO = CreditCardCharges_RO %>%
+      filter(Product != "AFR Test") %>%
+      #separate(Date, into = c("Year", "Month", "Day"), sep = "-" ) %>% 
+      #unite(Date, c(Day, Month, Year), sep = ".") %>%
+      mutate(Date = as.Date(Date)) %>%
+      left_join(Product_Agg, by = c("Product" = "Product_Old")) %>%
+      select(-Product, Product = Product.y) %>%
+      mutate(Amount = ifelse(Accural == "Discount" & Amount > 0, (Amount * -1), Amount)) %>%
+      unite(VLookUPCondition, c(Product, Accural), sep = "-" ) %>%
+      group_by(VLookUPCondition, Date) %>%
+      summarise(Amount = sum(Amount)) %>%
+      dcast(VLookUPCondition ~ Date , value.var = "Amount") %>%
+      mutate(across(everything(), ~replace_na(.x, 0)))
+    
+    
+  }
+  
+  #Latest CardReport RO
+  {
+    
+    file_paths_RO <- list.files("//cow.easycredit.bg/FileServer/White Card/International/Romania/Reports/Cards","csv",  full.names = T)
+    
+    new_files_RO = c()
+    
+    for (file_RO in file_paths_RO) {
+      file_date_BG = as.Date(
+        substr(file_RO, nchar(file_RO) - 13, nchar(file_RO)-4),
+        format = "%d.%m.%Y"
+      )
+      
+      if (file_date_BG >= Today) {
+        new_files_RO = c(new_files_RO, file_RO)
+      }
+      
+      
+    } 
+    
+    
+    
+    #    file_paths_RO <- list.files("//cow.easycredit.bg/FileServer/White Card/Reports/Reports/Romania/Cards","csv",  full.names = T)
+    #    
+    #    new_files_RO = c()
+    #    
+    #    for (file_RO in file_paths_RO) {
+    #      file_date_BG = as.Date(
+    #        substr(file_RO, nchar(file_RO) - 13, nchar(file_RO)-4),
+    #        format = "%d.%m.%Y"
+    #      )
+    #      
+    #   
+    #    
+    #      if (file_date_BG >= Today) {
+    #        new_files_RO = c(new_files_RO, file_RO)
+    #      }
+    #    } 
+    
+    
+    #CardsReports_today_RO = tibble(File = file_paths_RO) %>%
+    # mutate(Data = lapply(file_paths_RO, read.csv2)) %>%
+    # unnest(Data) %>%
+    #separate(File, c("Name", "Date_1"), "s_") %>%
+    #separate(Date_1,c("Date", "old"), ".csv") %>%
+    CardsReports_today_RO = read.csv2(new_files_RO) %>%
+      #mutate(Date = as.Date("2022-05-09")) %>%
+      mutate(Date = file_date_BG) %>%
+      mutate(Date = Date - as.difftime(1, unit="days")) %>%
+      select(Date, Product = "???????", Limit = "?????", TAD = "???????.??.??????????") %>%
+      left_join(Product_Agg, by = c("Product" = "Product_Old")) %>%
+      select(-Product, Product = Product.y) %>%
+      mutate(Limit = as.numeric(Limit)) %>%
+      mutate(TAD = as.numeric(TAD)) %>%
+      #mutate(Date = as.factor(Date)) %>%
+      #mutate(Date = as.Date(Date, format = "%d.%m.%Y") - as.difftime(1, unit="days")) %>%
+      #separate(Date, into = c("Year", "Month", "Date"), sep = "-" ) %>%
+      #unite(Date, c("Date", "Month", "Year"), sep = ".", remove = F) %>%
+      filter(TAD != "---------------------") %>%
+      mutate(Product = ifelse(Product == "AFR", "Axi RO",
+                              ifelse(Product == "AFR 2", "Axi RO",
+                                     ifelse(Product == "AFR 3", "Axi RO",
+                                            ifelse(Product == "AFR Test", "Axi RO",
+                                                   ifelse(Product == "AFR 2 - SC", "Axi RO", Product)))))) %>%
+      #mutate(Date = as.Date(Date, format = "%d.%m.%Y")) %>%
+      select(Date,Product, Limit, TAD)
+    
+    # write_xlsx(CardsReports_today_RO, "./Output Data/CardsReports_today_RO.xlsx")
+    
+    CardReportROMaxDate = max(CardsReports_today_RO$Date)      
+    
+    CardReportRDS_RO = readRDS("//cow.easycredit.bg/FileServer/White Card/BAR/R Scripts/Rscript_KPI_report_SQL/Input Data/CardReportRDS_RO.rds")%>%
+      mutate(Date = as.Date(Date))
+    
+    #CardReportRDS_RO = readRDS("./BackUp_RDS/CardReport_RDS/CardReportRDS_RO_BackUp 07.06.2022_08.55.rds") %>%
+    #mutate(Date = as.Date(Date))
+    
+    CardReportBind_RO_MaxDate = max(CardReportRDS_RO$Date)    
+    
+    if(CardReportROMaxDate > CardReportBind_RO_MaxDate)
+    { 
+      CardReportBind_RO = CardsReports_today_RO %>%
+        bind_rows(CardReportRDS_RO) %>%
+        #mutate(Date = as.Date(Date, format= "%d.%m.%Y")) %>%
+        filter(Date >= "2022-03-01") %>%
+        #separate(Date, into = c("Year", "Month", "Date")) %>%
+        #unite(Date, c(Date,Month,Year), sep = ".") %>%
+        mutate(Count = 1)
+    }    else {
+      
+      CardReportBind_RO = CardReportRDS_RO
+    }
+    
+    saveRDS(CardReportBind_RO, "//cow.easycredit.bg/FileServer/White Card/BAR/R Scripts/Rscript_KPI_report_SQL/Input Data/CardReportRDS_RO.rds")
+    saveRDS(CardReportBind_RO,  paste("//cow.easycredit.bg/FileServer/White Card/BAR/R Scripts/Rscript_KPI_report_SQL/BackUp_RDS/CardReport_RDS/CardReportRDS_RO_BackUp", CurrentDate))
+    
+    
+    #Pivots
+    {
+      CardReport_pivotLimit_RO = CardReportBind_RO %>%
+        select(Date, Product, Limit) %>%
+        mutate(`Approved limits` = "Approved limits") %>%
+        unite(VLookUPCondition, c(Product, `Approved limits`), sep = "-" ) %>%
+        group_by(VLookUPCondition, Date) %>%
+        summarise(`Limit` = sum(`Limit`)) %>%
+        dcast(`VLookUPCondition`  ~  Date, value.var = "Limit")
+      
+      CardReport_pivotTAD_RO = CardReportBind_RO %>%
+        select(Date, Product, TAD) %>%
+        mutate(`Outstanding balance` = "Outstanding balance") %>%
+        unite(VLookUPCondition, c(Product, `Outstanding balance`), sep = "-" ) %>%
+        group_by(VLookUPCondition, Date) %>%
+        summarise(`TAD` = sum(`TAD`)) %>%
+        dcast(`VLookUPCondition`  ~  Date, value.var = "TAD")
+      
+      CardReport_pivotTCount_RO = CardReportBind_RO %>%
+        select(Date, Product, Count) %>%
+        mutate(`New Base` = "New Base") %>%
+        unite(VLookUPCondition, c(Product, `New Base`), sep = "-" ) %>%
+        group_by(VLookUPCondition, Date) %>%
+        summarise(`Count` = sum(`Count`)) %>%
+        dcast(`VLookUPCondition`  ~  Date, value.var = "Count")
+      
+      RomaniaCardReportPivotBIND = CardReport_pivotLimit_RO %>%
+        bind_rows(CardReport_pivotTAD_RO, CardReport_pivotTCount_RO) %>%
+        drop_na()
+    }
+    
+  }
+  
+  # Closed Cards RO
+  {
+    ClosedCards_Count_RO = ClosedCards_RO %>%
+      mutate(Date = as.Date(Date)) %>%
+      bind_rows(DummyClosedCards) %>%
+      mutate(Date = as.Date(Date)) %>%
+      left_join(Product_Agg, by = c("Product" = "Product_Old")) %>%
+      select(-Product, Product = Product.y) %>%
+      unite(VLookUPCondition, c(Product, CloseReason), sep = "-" ) %>%
+      group_by(VLookUPCondition, Date) %>%
+      summarise(Count = sum(Count)) %>%
+      dcast(VLookUPCondition ~ Date , value.var = "Count")
+    
+    ClosedCards_Count_RO[is.na(ClosedCards_Count_RO)] <- 0 
+  }
+  
+  ExcellFile_RO <- list("Approved_Count_limit_RO" = Approved_Count_limit_RO, "Activated_Count_limit_RO" = Activated_Count_limit_RO,
+                        "Utilized_Count_Amount_RO" = Utilized_Count_Amount_RO,"PaymentsSum_RO" = Payments_RO_All, 
+                        "Cards_Charges_RO" = Cards_Charges_RO, "ClosedCards_Count_RO" = ClosedCards_Count_RO,
+                        "CardReportInfo" = RomaniaCardReportPivotBIND, "HideColmn" = Dates_DF_HideColumn )
+  
+  write_xlsx(ExcellFile_RO,paste0("//cow.easycredit.bg/FileServer/White Card/BAR/R Scripts/Rscript_KPI_report_SQL/Output Data/KPI_Report_RO_"
+                                  ,Date_For_file,".xlsx"))
+}
+
+#Spain R-revision!
+{
+  
+  # Approved Clients SP
+  {
+    Approved_Count_SP = AppCards_SP %>%
+      mutate(Date = as.Date(Date)) %>%
+      left_join(Product_Agg, by = c("Product" = "Product_Old")) %>%
+      select(-Product, Product = Product.y) %>%
+      bind_rows(DummyApprovedCard) %>%
+      mutate(Approved = "Approved") %>%
+      unite(VLookUPCondition, c(Product, Approved), sep = "-" ) %>%
+      group_by(VLookUPCondition, Date) %>%
+      summarise(ApprovedClients = sum(ApprovedClients)) %>%
+      dcast(VLookUPCondition ~ Date, value.var = "ApprovedClients") %>%
+      mutate(across(everything(), ~replace_na(.x, 0)))
+    
+    ####################################################################
+    Approved_Limit_SP = AppCards_SP %>%
+      mutate(Date = as.Date(Date)) %>%
+      left_join(Product_Agg, by = c("Product" = "Product_Old")) %>%
+      select(-Product, Product = Product.y) %>%
+      bind_rows(DummyApprovedCard) %>%
+      mutate(Approved = "Approved limits") %>%
+      unite(VLookUPCondition, c(Product, Approved), sep = "-" ) %>%
+      group_by(VLookUPCondition, Date) %>%
+      summarise(SumLimit = sum(SumLimit)) %>%
+      dcast(VLookUPCondition ~ Date, value.var = "SumLimit") %>%
+      mutate(across(everything(), ~replace_na(.x, 0)))
+    
+    
+    Approved_Count_limit_SP = Approved_Count_SP %>%
+      bind_rows(Approved_Limit_SP)
+    
+  }
+  
+  # Activated Clients SP
+  {
+    Activated_Count_SP = ActivatedCards_SP %>%
+      mutate(across(everything(), ~replace_na(.x, 0))) %>%
+      mutate(Date = dmy(Date)) %>%
+      left_join(Product_Agg, by = c("Product" = "Product_Old")) %>%
+      select(-Product, Product = Product.y) %>%
+      bind_rows(DummyActivatedCard) %>%
+      mutate(Activated = "Activated") %>%
+      unite(VLookUPCondition, c(Product, Activated), sep = "-" ) %>%
+      group_by(VLookUPCondition, Date) %>%
+      summarise(ActivatedClients = sum(ActivatedClients)) %>%
+      dcast(VLookUPCondition ~ Date, value.var = "ActivatedClients")
+    #/////////////////////////////////////////////////////////////////////
+    
+    Activated_limit_SP = ActivatedCards_SP %>%
+      mutate(across(everything(), ~replace_na(.x, 0))) %>%
+      mutate(Date = dmy(Date)) %>%
+      left_join(Product_Agg, by = c("Product" = "Product_Old")) %>%
+      select(-Product, Product = Product.y) %>%
+      bind_rows(DummyActivatedCard) %>%
+      mutate(Activatedlimit = "Activated limit") %>%
+      unite(VLookUPCondition, c(Product, Activatedlimit), sep = "-" ) %>%
+      group_by(VLookUPCondition, Date) %>%
+      summarise(ActivatedLimit = sum(ActivatedLimit)) %>%
+      dcast(VLookUPCondition ~ Date, value.var = "ActivatedLimit") 
+    
+    
+    Activated_Count_limit_SP = Activated_Count_SP %>%
+      bind_rows(Activated_limit_SP)
+    
+    
+  }
+  
+  # Utillized Amounts SP
+  {
+    UtilizedAmountCount_SP = UtillizedAMount_SP %>%
+      mutate(Date = as.Date(Date)) %>%
+      left_join(Product_Agg, by = c("Product" = "Product_Old")) %>%
+      select(-Product, Product = Product.y) %>%
+      mutate(TransactionChanel = ifelse(TransactionChanel == "ATM", "ATM (transactions)", TransactionChanel)) %>%
+      mutate(TransactionChanel = ifelse(TransactionChanel == "POS", "POS (transactions)", TransactionChanel)) %>%
+      mutate(TransactionChanel = ifelse(TransactionChanel == "ECOMM", "Online (transactions)", TransactionChanel)) %>%
+      unite(VLookUPCondition, c(Product, TransactionChanel), sep = "-" ) %>%
+      group_by(VLookUPCondition, Date) %>%
+      summarise(CountTransaction = sum(CountTransaction)) %>%
+      dcast(VLookUPCondition ~ Date , value.var = "CountTransaction")
+    
+    
+    ################################################################################################# 
+    
+    UtilizedAmountSUM_SP = UtillizedAMount_SP %>%
+      mutate(Date = as.Date(Date)) %>%
+      left_join(Product_Agg, by = c("Product" = "Product_Old")) %>%
+      select(-Product, Product = Product.y) %>%
+      mutate(TransactionChanel = ifelse(TransactionChanel == "ATM", "ATM (sum)", TransactionChanel)) %>%
+      mutate(TransactionChanel = ifelse(TransactionChanel == "POS", "POS (sum)", TransactionChanel)) %>%
+      mutate(TransactionChanel = ifelse(TransactionChanel == "ECOMM", "Online (sum)", TransactionChanel)) %>%
+      unite(VLookUPCondition, c(Product, TransactionChanel), sep = "-" ) %>%
+      group_by(VLookUPCondition, Date) %>%
+      summarise(Amount = sum(Amount)) %>%
+      dcast(VLookUPCondition ~ Date , value.var = "Amount")
+    
+    
+    Utilized_Count_Amount_SP = UtilizedAmountCount_SP %>%
+      bind_rows(UtilizedAmountSUM_SP)
+    
+    
+  }
+  
+  # Payments Cards SP
+  {
+    
+    PaymentsSum_SP = PaymentsCards_SP %>%
+      mutate(Date = as.Date(Date)) %>%
+      left_join(Product_Agg, by = c("Product" = "Product_Old")) %>%
+      select(-Product, Product = Product.y) %>%
+      unite(VLookUPCondition, c(Product, Notes), sep = "-" ) %>%
+      group_by(VLookUPCondition, Date) %>%
+      summarise(Amount = sum(Amount)) %>%
+      dcast(VLookUPCondition ~ Date , value.var = "Amount") %>%
+      mutate(across(everything(), ~replace_na(.x, 0)))
+    #########################################################
+    
+    Winnigs_Reversal_Sum_SP = Winnigs_Reversal_SP %>%
+      mutate(Date = as.Date(Date)) %>%
+      left_join(Product_Agg, by = c("Product" = "Product_Old")) %>%
+      select(-Product, Product = Product.y) %>%
+      unite(VLookUPCondition, c(Product, Notes), sep = "-" ) %>%
+      group_by(VLookUPCondition, Date) %>%
+      summarise(Amount = sum(Amount)) %>%
+      dcast(VLookUPCondition ~ Date , value.var = "Amount")
+    
+    Winnigs_Reversal_Sum_SP[is.na(Winnigs_Reversal_Sum_SP)] <- 0 
+    
+    Payments_SP_All = PaymentsSum_SP %>%
+      bind_rows(Winnigs_Reversal_Sum_SP)
+    
+  }
+  
+  # CreditCards Charges RO
+  {
+    Cards_Charges_SP = CreditCardCharges_SP %>%
+      mutate(Date = as.Date(Date)) %>%
+      left_join(Product_Agg, by = c("Product" = "Product_Old")) %>%
+      select(-Product, Product = Product.y) %>%
+      #mutate(Amount = ifelse(Accural == "Discount" & Amount > 0, (Amount * -1), Amount)) %>%
+      unite(VLookUPCondition, c(Product, Accural), sep = "-" ) %>%
+      group_by(VLookUPCondition, Date) %>%
+      summarise(Amount = sum(Amount)) %>%
+      dcast(VLookUPCondition ~ Date , value.var = "Amount") %>%
+      mutate(across(everything(), ~replace_na(.x, 0)))
+    
+    
+  }
+  
+  #Latest CardReport SP
+  {
+    
+    file_paths_SP <- list.files("//cow.easycredit.bg/FileServer/White Card/Reports ES/Card_Report_SP","csv",  full.names = T)
+    
+    new_files_SP = c()
+    
+    for (file_SP in file_paths_SP) {
+      file_date_BG = as.Date(
+        substr(file_SP, nchar(file_SP) - 13, nchar(file_SP)-4),
+        format = "%d.%m.%Y"
+      )
+      
+      if (file_date_BG >= Today) {
+        new_files_SP = c(new_files_SP, file_SP)
+      }
+      
+      
+    } 
+    
+    
+    
+    
+    CardsReports_today_SP = read.csv2(new_files_SP) %>%
+      mutate(Date = file_date_BG) %>%
+      mutate(Date = Date - as.difftime(1, unit="days")) %>%
+      select(Date, Product, Limit, TAD = "Total.due.to.reset") %>%
+      mutate(Limit = as.numeric(Limit) 
+             ,TAD = as.numeric(TAD)
+             ,Product = "AXI ES") %>%
+      filter(TAD != "---------------------") %>%
+      # mutate(Product = ifelse(Product == "AFR", "Axi RO",
+      #                         ifelse(Product == "AFR 2", "Axi RO",
+      #                                ifelse(Product == "AFR 3", "Axi RO",
+      #                                       ifelse(Product == "AFR Test", "Axi RO",
+      #                                              ifelse(Product == "AFR 2 - SC", "Axi RO", Product)))))) %>%
+      select(Date,Product, Limit, TAD)
+    
+    # write_xlsx(CardsReports_today_RO, "./Output Data/CardsReports_today_RO.xlsx")
+    
+    CardReportSPMaxDate = max(CardsReports_today_SP$Date)      
+    
+    CardReportRDS_SP = readRDS("//cow.easycredit.bg/FileServer/White Card/BAR/R Scripts/Rscript_KPI_report_SQL/Input Data/CardReportRDS_SP.rds")%>%
+      mutate(Date = as.Date(Date))
+    
+    #CardReportRDS_RO = readRDS("./BackUp_RDS/CardReport_RDS/CardReportRDS_RO_BackUp 07.06.2022_08.55.rds") %>%
+    #mutate(Date = as.Date(Date))
+    
+    CardReportBind_SP_MaxDate = max(CardReportRDS_SP$Date)    
+    
+    if(CardReportSPMaxDate > CardReportBind_SP_MaxDate)
+    { 
+      CardReportBind_SP = CardsReports_today_SP %>%
+        bind_rows(CardReportRDS_SP) %>%
+        #mutate(Date = as.Date(Date, format= "%d.%m.%Y")) %>%
+        filter(Date >= "2022-03-01") %>%
+        #separate(Date, into = c("Year", "Month", "Date")) %>%
+        #unite(Date, c(Date,Month,Year), sep = ".") %>%
+        mutate(Count = 1)
+    }    else {
+      
+      CardReportBind_SP = CardReportRDS_SP
+    }
+    
+    saveRDS(CardReportBind_SP, "//cow.easycredit.bg/FileServer/White Card/BAR/R Scripts/Rscript_KPI_report_SQL/Input Data/CardReportRDS_SP.rds")
+    saveRDS(CardReportBind_SP,  paste("//cow.easycredit.bg/FileServer/White Card/BAR/R Scripts/Rscript_KPI_report_SQL/BackUp_RDS/CardReport_RDS/CardReportRDS_SP_BackUp", CurrentDate))
+    
+    
+    #Pivots
+    {
+      CardReport_pivotLimit_SP = CardReportBind_SP %>%
+        select(Date, Product, Limit) %>%
+        mutate(`Approved limits` = "Approved limits") %>%
+        unite(VLookUPCondition, c(Product, `Approved limits`), sep = "-" ) %>%
+        group_by(VLookUPCondition, Date) %>%
+        summarise(`Limit` = sum(`Limit`)) %>%
+        dcast(`VLookUPCondition`  ~  Date, value.var = "Limit")
+      
+      CardReport_pivotTAD_SP = CardReportBind_SP %>%
+        select(Date, Product, TAD) %>%
+        mutate(`Outstanding balance` = "Outstanding balance") %>%
+        unite(VLookUPCondition, c(Product, `Outstanding balance`), sep = "-" ) %>%
+        group_by(VLookUPCondition, Date) %>%
+        summarise(`TAD` = sum(`TAD`)) %>%
+        dcast(`VLookUPCondition`  ~  Date, value.var = "TAD")
+      
+      CardReport_pivotTCount_SP = CardReportBind_SP %>%
+        select(Date, Product, Count) %>%
+        mutate(`New Base` = "New Base") %>%
+        unite(VLookUPCondition, c(Product, `New Base`), sep = "-" ) %>%
+        group_by(VLookUPCondition, Date) %>%
+        summarise(`Count` = sum(`Count`)) %>%
+        dcast(`VLookUPCondition`  ~  Date, value.var = "Count")
+      
+      SpainCardReportPivotBIND = CardReport_pivotLimit_SP %>%
+        bind_rows(CardReport_pivotTAD_SP, CardReport_pivotTCount_SP) %>%
+        drop_na()
+    }
+    
+  }
+  
+  # Closed Cards RO
+  {
+    ClosedCards_Count_SP = ClosedCards_SP %>%
+      mutate(Date = as.Date(Date)) %>%
+      left_join(Product_Agg, by = c("Product" = "Product_Old")) %>%
+      select(-Product, Product = Product.y) %>%
+      bind_rows(DummyClosedCards) %>%
+      mutate(Date = as.Date(Date)) %>%
+      unite(VLookUPCondition, c(Product, CloseReason), sep = "-" ) %>%
+      group_by(VLookUPCondition, Date) %>%
+      summarise(Count = sum(Count)) %>%
+      dcast(VLookUPCondition ~ Date , value.var = "Count")
+    
+    ClosedCards_Count_SP[is.na(ClosedCards_Count_SP)] <- 0 
+  }
+  
+  ExcellFile_SP <- list("Approved_Count_limit_SP" = Approved_Count_limit_SP, "Activated_Count_limit_SP" = Activated_Count_limit_SP,
+                        "Utilized_Count_Amount_SP" = Utilized_Count_Amount_SP,"PaymentsSum_SP" = Payments_SP_All, 
+                        "Cards_Charges_SP" = Cards_Charges_SP, "ClosedCards_Count_SP" = ClosedCards_Count_SP,
+                        "CardReportInfo" = SpainCardReportPivotBIND, "HideColmn" = Dates_DF_HideColumn )
+  
+  write_xlsx(ExcellFile_SP,paste0("//cow.easycredit.bg/FileServer/White Card/BAR/R Scripts/Rscript_KPI_report_SQL/Output Data/KPI_Report_SP_"
+                                  ,Date_For_file,".xlsx"))
+}
+
+
+lastrundate = Sys.Date()
+
+saveRDS(lastrundate, "//cow.easycredit.bg/FileServer/White Card/BAR/R Scripts/Rscript_KPI_report_SQL/Output Data/LastRunDate.rds")
