@@ -1,0 +1,198 @@
+library(readxl)
+library(tidyverse)
+library(data.table)
+library(reshape2)
+library(taskscheduleR)
+
+script_path = "J:/BAR/R Scripts/00_All_Cards_Business/01_Digi_Report_Automation/010_Digi_Automation.R"
+
+taskscheduler_create(
+  taskname = "Digi_Automation",
+  rscript = script_path,
+  schedule = "DAILY",
+  starttime = "08:30",
+  startdate = format(Sys.Date(), "%d/%m/%Y")
+)
+
+Today = Sys.Date() 
+CheckDate = format(Today, format ="%d") 
+CurrentMonth <- as.numeric(format(Today, format ="%m")) #- 5
+CurrentYear = format(Today, format ="%Y")
+
+
+#DateForFIle
+
+if (CheckDate == "01") {
+  Date_For_file = paste0(CurrentYear, sprintf("%02d", as.numeric(CurrentMonth) - 1))
+} else {
+  Date_For_file = paste0(CurrentYear, sprintf("%02d", as.numeric(CurrentMonth)))
+}
+
+
+### --- Product_Agg---###
+{
+  
+  Product_Agg = read_excel("J:/BAR/R Scripts/00_All_Cards_Business/03_Daily_Report_Automation/Files And Documentation/Product_Agg.xlsx") 
+  
+}
+
+### --- Credit_Dept. ERP Lke Query---###
+{
+  
+  myc <- DBI::dbConnect(odbc::odbc()
+                        , driver = "SQL Server"
+                        , server = "Scorpio.smartitbg.int"
+                        , database = "BIsmartWCBG"
+  )
+  
+  Query <- read_file("J:/BAR/R Scripts/00_All_Cards_Business/03_Daily_Report_Automation/SQL Queries/BG_Credit_Dept_SameAsERP.sql")
+  
+  start_time <- Sys.time()
+  BG_Credit_Dept <- DBI::dbFetch(DBI::dbSendQuery(myc, Query))
+  print(paste("Done in", round(difftime(Sys.time(), start_time,unit = "mins"),2), "minutes"))
+  
+  #Close the database connection
+  DBI::dbDisconnect(myc)
+  
+}
+
+
+### --- Credit_Dept. Formating---###
+{
+  
+  BG_Credit_Dept_Format = BG_Credit_Dept %>%
+    left_join(Product_Agg, by= "Product") %>%
+    mutate(DateKO = as.Date(DateKO)
+         , CreditDept_Status = case_when(CreditDept_Status == "Client refuse loan" ~ "Рљ СЃРµ РѕС‚РєР°Р·РІР° РѕС‚ РєСЂРµРґРёС‚Р°"
+                                        , TRUE ~ CreditDept_Status)
+         , CreditDept_Reason = case_when(CreditDept_Reason == "CCR check" ~ "РџСЂРѕРІРµСЂРєР° РІ Р¦РљР "
+                                       , CreditDept_Reason == "Check Central Credit Register" ~ "РџСЂРѕРІРµСЂРєР° Р¦РљР "
+                                       , CreditDept_Reason == "Check in National Social Security Institute" ~ "РџСЂРѕРІРµСЂРєР° РІ РќРћР"
+                                       , CreditDept_Reason == "Check internal database" ~ "РџСЂРѕРІРµСЂРєР° РІСЉС‚СЂРµС€РЅР° Р±Р°Р·Р° РґР°РЅРЅРё"
+                                       , CreditDept_Reason == "Correction - scoring" ~ "РљРѕСЂРµРєС†РёСЏ - СЃРєРѕСЂРёРЅРі"
+                                       , CreditDept_Reason == "Find alternative sources" ~ "РќР°РјРµСЂРµРЅ Р°Р»С‚РµСЂРЅР°С‚РёРІРµРЅ РёР·С‚РѕС‡РЅРёРє"
+                                       , CreditDept_Reason == "Invalid ID" ~ "РќРµРІР°Р»РёРґРЅР° Р»РёС‡РЅР° РєР°СЂС‚Р°"
+                                       , CreditDept_Reason == "No connection with Client" ~ "РќСЏРјР° РІСЂСЉР·РєР° СЃ Рљ"
+                                       , CreditDept_Reason == "Other rejection reasons" ~ "РќРµСЃРїР°Р·РІР°РЅРµ РЅР° РІСЉС‚СЂРµС€РЅРё РїСЂР°РІРёР»Р° Рё РїСЂРѕС†РµРґСѓСЂРё"
+                                       , CreditDept_Reason == "Reduced amount / duration" ~ "РќР°РјР°Р»РµРЅР° СЃСѓРјР°/СЃСЂРѕРє"
+                                       , CreditDept_Reason == "Refuses assistance for documents" ~ "РћС‚РєР°Р·РІР° СЃСЉРґРµР№СЃС‚РІРёРµ Р·Р° РґРѕРєСѓРјРµРЅС‚Рё"
+                                       , CreditDept_Reason == "Risk profile" ~ "Р РёСЃРєРѕРІ РїСЂРѕС„РёР»"
+                                       , CreditDept_Reason == "Risk profile" ~ "Р РёСЃРєРѕРІ РїСЂРѕС„РёР»"
+                                       , TRUE ~ CreditDept_Reason)) 
+  
+  ## -- SPlit the Files by Products and KO reason-- ##
+
+  #WhiteCard
+  {
+  #Refused
+  BG_Credit_Dept_Format_WC_Refused = BG_Credit_Dept_Format %>%
+    filter(Product_Agg == "WhiteCard"
+         , CreditDept_Status == "Рљ СЃРµ РѕС‚РєР°Р·РІР° РѕС‚ РєСЂРµРґРёС‚Р°") %>%
+    group_by(CreditDept_Status, CreditDept_Reason, DateKO) %>%
+    summarise(OfferSK = length(OfferSK))%>%
+    dcast(CreditDept_Status + CreditDept_Reason ~ DateKO, value.var = "OfferSK") %>%
+    mutate_all(~ifelse(is.na(.), 0, .))
+  
+  #Rejected
+  BG_Credit_Dept_Format_WC_Rejected = BG_Credit_Dept_Format %>%
+    filter(Product_Agg == "WhiteCard"
+           , CreditDept_Status == "РћС‚С…РІСЉСЂР»СЏРј Рљ") %>%
+    group_by(CreditDept_Status, CreditDept_Reason, DateKO) %>%
+    summarise(OfferSK = length(OfferSK))%>%
+    dcast(CreditDept_Status + CreditDept_Reason ~ DateKO, value.var = "OfferSK") %>%
+    mutate_all(~ifelse(is.na(.), 0, .))
+  
+  #Approved
+  BG_Credit_Dept_Format_WC_DecreaseLimit = BG_Credit_Dept_Format %>%
+    filter(Product_Agg == "WhiteCard"
+           , CreditDept_Status %in% c("РќР°РјР°Р»СЏРІР°Рј Р»РёРјРёС‚")) %>%
+    group_by(CreditDept_Status, CreditDept_Reason, DateKO) %>%
+    summarise(OfferSK = length(OfferSK))%>%
+    dcast(CreditDept_Status + CreditDept_Reason ~ DateKO, value.var = "OfferSK") %>%
+    mutate_all(~ifelse(is.na(.), 0, .))
+    }
+  
+  #A1
+  {
+    #Refused
+    BG_Credit_Dept_Format_A1_Refused = BG_Credit_Dept_Format %>%
+      filter(Product_Agg == "A1"
+             , CreditDept_Status == "Рљ СЃРµ РѕС‚РєР°Р·РІР° РѕС‚ РєСЂРµРґРёС‚Р°") %>%
+      group_by(CreditDept_Status, CreditDept_Reason, DateKO) %>%
+      summarise(OfferSK = length(OfferSK))%>%
+      dcast(CreditDept_Status + CreditDept_Reason ~ DateKO, value.var = "OfferSK") %>%
+      mutate_all(~ifelse(is.na(.), 0, .))
+    
+    #Rejected
+    BG_Credit_Dept_Format_A1_Rejected = BG_Credit_Dept_Format %>%
+      filter(Product_Agg == "A1"
+             , CreditDept_Status == "РћС‚С…РІСЉСЂР»СЏРј Рљ") %>%
+      group_by(CreditDept_Status, CreditDept_Reason, DateKO) %>%
+      summarise(OfferSK = length(OfferSK))%>%
+      dcast(CreditDept_Status + CreditDept_Reason ~ DateKO, value.var = "OfferSK") %>%
+      mutate_all(~ifelse(is.na(.), 0, .))
+    
+    #Approved
+    BG_Credit_Dept_Format_A1_DecreasedLimit = BG_Credit_Dept_Format %>%
+      filter(Product_Agg == "A1"
+             , CreditDept_Status %in% c("РќР°РјР°Р»СЏРІР°Рј Р»РёРјРёС‚")) %>%
+      group_by(CreditDept_Status, CreditDept_Reason, DateKO) %>%
+      summarise(OfferSK = length(OfferSK))%>%
+      dcast(CreditDept_Status + CreditDept_Reason ~ DateKO, value.var = "OfferSK") %>%
+      mutate_all(~ifelse(is.na(.), 0, .))
+  }
+  
+  #Wc_Gold
+  {
+    # Create a dummy row
+    dummy_row <- data.frame(
+      Product_Agg = "WhiteCard Gold",
+      CreditDept_Status = "Рљ СЃРµ РѕС‚РєР°Р·РІР° РѕС‚ РєСЂРµРґРёС‚Р°",
+      CreditDept_Reason = "Dummy Reason",
+      DateKO = as.Date("2023-01-01"),
+      OfferSK = 0
+    )
+    
+    #Refused
+    BG_Credit_Dept_Format_WCGold_Refused = BG_Credit_Dept_Format %>%
+      bind_rows(dummy_row) %>%
+         filter(Product_Agg == "WhiteCard Gold"
+           , CreditDept_Status == "Рљ СЃРµ РѕС‚РєР°Р·РІР° РѕС‚ РєСЂРµРґРёС‚Р°") %>%
+      group_by(CreditDept_Status, CreditDept_Reason, DateKO) %>%
+      summarise(OfferSK = length(OfferSK))%>%
+      dcast(CreditDept_Status + CreditDept_Reason ~ DateKO, value.var = "OfferSK") %>%
+      mutate_all(~ifelse(is.na(.), 0, .))
+    
+    #Rejected
+    BG_Credit_Dept_Format_WCGold_Rejected = BG_Credit_Dept_Format %>%
+      filter(Product_Agg == "WhiteCard Gold"
+             , CreditDept_Status == "РћС‚С…РІСЉСЂР»СЏРј Рљ") %>%
+      group_by(CreditDept_Status, CreditDept_Reason, DateKO) %>%
+      summarise(OfferSK = length(OfferSK))%>%
+      dcast(CreditDept_Status + CreditDept_Reason ~ DateKO, value.var = "OfferSK") %>%
+      mutate_all(~ifelse(is.na(.), 0, .))
+    
+    #Approved
+    BG_Credit_Dept_Format_WCGold_DecreseLimit = BG_Credit_Dept_Format %>%
+      filter(Product_Agg == "WhiteCard Gold"
+             , CreditDept_Status %in% c("РќР°РјР°Р»СЏРІР°Рј Р»РёРјРёС‚")) %>%
+      group_by(CreditDept_Status, CreditDept_Reason, DateKO) %>%
+      summarise(OfferSK = length(OfferSK))%>%
+      dcast(CreditDept_Status + CreditDept_Reason ~ DateKO, value.var = "OfferSK") %>%
+      mutate_all(~ifelse(is.na(.), 0, .))
+  }
+  
+  BG_Credit_Dept = list("WC_Refused" = BG_Credit_Dept_Format_WC_Refused
+                      , "WC_Rejected" =  BG_Credit_Dept_Format_WC_Rejected
+                      , "WC_DecresseLimit" =  BG_Credit_Dept_Format_WC_DecreaseLimit
+                      , "A1_Refused" = BG_Credit_Dept_Format_A1_Refused
+                      , "A1_Rejected" = BG_Credit_Dept_Format_A1_Rejected
+                      , "A1_DecreaseLimit" = BG_Credit_Dept_Format_A1_DecreasedLimit
+                      , "WC_Gold_Refused" = BG_Credit_Dept_Format_WCGold_Refused
+                      , "WC_Gold_Rejected" = BG_Credit_Dept_Format_WCGold_Rejected
+                      , "WC_Gold_DecreseLimit" = BG_Credit_Dept_Format_WCGold_DecreseLimit)
+  
+  
+}
+
+writexl::write_xlsx(BG_Credit_Dept, "J:/BAR/R Scripts/00_All_Cards_Business/03_Daily_Report_Automation/Output Data/BG_Credit_Dept_Format.xlsx")
