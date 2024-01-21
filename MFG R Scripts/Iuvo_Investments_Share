@@ -1,0 +1,118 @@
+library(readxl)
+library(tidyverse)
+library(data.table)
+library(reshape2)
+library(taskscheduleR)
+
+#script_path = "J:/BAR/R Scripts/00_All_Cards_Business/01_Digi_Report_Automation/010_Digi_Automation.R"
+#
+#taskscheduler_create(
+#  taskname = "Digi_Automation",
+#  rscript = script_path,
+#  schedule = "DAILY",
+#  starttime = "08:30",
+#  startdate = format(Sys.Date(), "%d/%m/%Y")
+#)
+
+
+Today = Sys.Date() 
+CheckDate = format(Today, format ="%d") 
+CurrentMonth <- as.numeric(format(Today, format ="%m")) #- 5
+CurrentYear = format(Today, format ="%Y")
+
+
+#DateForFIle
+
+if (CheckDate == "01") {
+  Date_For_file = paste0(CurrentYear, sprintf("%02d", as.numeric(CurrentMonth) - 1))
+} else {
+  Date_For_file = paste0(CurrentYear, sprintf("%02d", as.numeric(CurrentMonth)))
+}
+
+
+### --- BID Codes---###
+{
+  
+  SP_BID_Codes = read_excel("//canova.smartitbg.int/PBI Files2/BID Codes.xlsx"
+                         , sheet = "Axi Spain") %>%
+    select(-"...3")
+  
+}
+
+### --- SP Internet Request---###
+{
+  
+  myc <- DBI::dbConnect(odbc::odbc()
+                        , driver = "SQL Server"
+                        , server = "Scorpio.smartitbg.int"
+                        , database = "BIsmartWCSP"
+  )
+  
+  Query <- read_file("J:/BAR/R Scripts/00_All_Cards_Business/01_Digi_Report_Automation/SQL Queries/Spain/SP_InternetRequest_With_BID.sql")
+  
+  start_time <- Sys.time()
+  SP_InternetRequest_BID <- DBI::dbFetch(DBI::dbSendQuery(myc, Query))
+  print(paste("Done in", round(difftime(Sys.time(), start_time,unit = "mins"),2), "minutes"))
+  
+  #Close the database connection
+  DBI::dbDisconnect(myc)
+  
+}
+
+###---SP Approved Cards---###
+{
+  myc <- DBI::dbConnect(odbc::odbc()
+                        , driver = "SQL Server"
+                        , server = "Scorpio.smartitbg.int"
+                        , database = "BIsmartWCSP"
+  )
+  
+  Query <- read_file("J:/BAR/R Scripts/00_All_Cards_Business/01_Digi_Report_Automation/SQL Queries/Spain/SP_ApprovedCards_With_BID.sql")
+  
+  start_time <- Sys.time()
+  SP_ApprovedCards_BID <- DBI::dbFetch(DBI::dbSendQuery(myc, Query))
+  print(paste("Done in", round(difftime(Sys.time(), start_time,unit = "mins"),2), "minutes"))
+  
+  #Close the database connection
+  DBI::dbDisconnect(myc)
+  
+  
+}
+
+###---SP Internet Reuquest Modification---###
+{
+  
+  SP_InternetRequest_Mod = SP_InternetRequest_BID %>%
+    left_join(SP_BID_Codes, by = c("Code" = "BID")) %>%
+    mutate(FromDate = as.Date(FromDate)) %>%
+    group_by(Channel, FromDate) %>%
+    summarise(RequestID = length(RequestID)) %>%
+    dcast(Channel ~ FromDate, value.var = "RequestID")%>%
+    mutate_all(~ifelse(is.na(.), 0, .))
+  
+}
+
+###---SP Approved Modification---###
+{
+  
+  SP_ApprovedCards_Mod = SP_ApprovedCards_BID %>%
+    left_join(SP_BID_Codes, by = c("Code_1" = "BID")) %>%
+    select(-"Code_2" ) %>% # remove the second BID code becouse we don't use for now in Spain
+    mutate(DateApproved = as.Date(DateApproved)) %>%
+    group_by(Channel, DateApproved) %>%
+    summarise(ContractNumber = length(ContractNumber)) %>%
+    dcast(Channel ~ DateApproved, value.var = "ContractNumber") %>%
+    mutate_all(~ifelse(is.na(.), 0, .))
+  
+}
+
+
+###---SP Write Excel---###
+{
+SP_Digi = list("SP Interner Request" = SP_InternetRequest_Mod
+            , "SP Approved Cards" =  SP_ApprovedCards_Mod)
+  
+
+writexl::write_xlsx(SP_Digi, paste0("J:/BAR/R Scripts/00_All_Cards_Business/01_Digi_Report_Automation/Output Data/SP_DigiReport_", Date_For_file, ".xlsx"))
+  
+}
