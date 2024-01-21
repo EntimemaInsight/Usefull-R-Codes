@@ -1,0 +1,93 @@
+# WITH PARAMETRIZATION
+
+library(odbc)
+library(tidyverse)
+
+# SET A TIME PERIOD
+
+start_date <- as.Date('2023-12-01')
+end_date <- as.Date('2023-12-30')
+
+
+# SQL Queries Loading
+
+server = "Scorpio"
+database = "BIsmartWCBG"
+
+conn <- dbConnect(odbc::odbc(), 
+                  driver = "ODBC Driver 17 for SQL Server", 
+                  server = server, 
+                  database = database, 
+                  Trusted_Connection = "Yes")
+
+sql_query <- paste("
+  DECLARE @StartDate DATE = '", start_date, "';
+  DECLARE @EndDate DATE = '", end_date, "';
+
+  SELECT 
+    DimOff.ContractNumber AS EasyClientNumber,
+    CONVERT(DATE, DimOff.DateClosed) AS Date,
+    DimPr.Name AS Product,
+    DimCR.Code AS CloseReason,
+    COUNT(*) AS Count 
+  FROM dwh.DimOffers AS DimOff
+  JOIN dwh.DimOffCloseReason AS DimCR ON DimCR.CloseReasonSK = DimOff.CloseReasonSK
+  JOIN dwh.DimProduct AS DimPr ON DimPr.ProductSK = DimOff.ProductSK
+  WHERE DimCR.CloseReasonSK BETWEEN 1 AND 3 
+    AND CONVERT(DATE, DimOff.DateClosed) BETWEEN @StartDate AND @EndDate
+  GROUP BY DimOff.ContractNumber, DimPr.Name, DimCR.Code, CONVERT(DATE, DimOff.DateClosed);
+", collapse = "")
+
+conn <- dbConnect(odbc::odbc(), 
+                  driver = "ODBC Driver 17 for SQL Server", 
+                  server = server, 
+                  database = database, 
+                  Trusted_Connection = "Yes")
+
+data_sql <- dbGetQuery(conn, sql_query) %>%
+  as.tibble()
+
+data_sql
+
+# WITH EXTERNAL LINK
+
+# SQL Queries Loading
+  
+  library(odbc)
+  library(tidyverse)
+  
+# Contract Date Loading
+  myc <- DBI::dbConnect(odbc::odbc(),
+                        driver = "SQL Server",
+                        server = "scorpio.smartitbg.int",
+                        database = "BIsmartWCBG")
+  
+  sql_query_1 <- read_file("J:/BAR/R Scripts/R_scripts_PD_reports/Usage_Analisys_Automation/SQL Querries/Contract_Date.sql")
+  
+  start_time <- Sys.time()
+  contract_date <- DBI::dbGetQuery(myc, sql_query_1) %>%
+    as.tibble() %>%
+    select(EasyClientNumber, ContractDate) %>%
+    rename(`Дата на подписване на договор` = ContractDate) %>%
+    mutate(`Дата на подписване на договор` = format(as.Date(`Дата на подписване на договор`), format = "%d.%m.%Y"))
+  
+  print(paste("Done in", round(difftime(Sys.time(), start_time, unit = "mins"), 2), "minutes"))
+  
+  DBI::dbDisconnect(myc)
+  
+  contract_date
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
