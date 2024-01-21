@@ -1,0 +1,653 @@
+library(data.table)
+library(readxl)
+library(writexl)
+library(tidyr)
+library(rlang)
+library(tidyverse)
+library(norm)
+library(reshape2)
+library(openxlsx)
+library(lubridate)
+library(ExcelFunctionsR)
+library(janitor)
+library(stringr)
+library(zoo)
+library(dplyr)
+library(odbc)
+library(DBI)
+library(scales) 
+library(taskscheduleR)
+lct <- Sys.getlocale("LC_TIME"); Sys.setlocale("LC_TIME", "C")
+
+
+#library(taskscheduleR)
+#
+#script_path = "J:/BAR/R_Automation/010_Collection_Sheduler.R"
+#
+#taskscheduler_create(
+#  taskname = "Collection_Automation_2",
+#  rscript = script_path,
+#  schedule = "DAILY",
+#  starttime = "08:30",
+#  startdate = format(Sys.Date(), "%d/%m/%Y")
+#)
+
+#Date for file
+Today = Sys.Date() 
+CheckDate = format(Today, format ="%d") 
+CurrentMonth <- as.numeric(format(Today, format ="%m")) #- 1
+CurrentYear = format(Today, format ="%Y")
+
+#DateForFiles
+if (CheckDate == "01") {
+  
+  Date_For_File = paste0(CurrentYear,"0",CurrentMonth -1)
+  
+} else {
+  
+  Date_For_File = paste0(CurrentYear,"0", CurrentMonth)
+}
+
+
+#Bulgaria Collection
+{
+  #PaymentsQuerry
+  {
+    myc <- DBI::dbConnect(odbc::odbc()
+                          , driver = "SQL Server"
+                          , server = "scorpio.smartitbg.int"
+                          , database = "BIsmartWCBG"
+    )
+    
+    Payments_all_BG <- paste0(" declare @CurrentDate date = getdate();
+declare @FirstOfMonth date = case when day(getdate())=1 then DATEADD(DAY,1,EOMONTH(@CurrentDate,-2)) else DATEADD(DAY,1,EOMONTH(@CurrentDate,-1)) end; 
+
+		SELECT EasyClientNumber
+		,CONVERT(DATE, CDATE) AS [Date]
+		, Product
+		, SUM(Amount) AS Amount
+		, tr
+		FROM (SELECT DISTINCT EasyClientNumber
+		, CASE 
+			WHEN p.Name = '	A1 - 8.5%'
+				THEN 'A1'
+			WHEN p.Name = 'РРђРњ'
+				THEN 'WhiteCard'
+			WHEN p.Name = 'Visa Р‘СЏР»Р° РєР°СЂС‚Р°'
+				THEN 'WhiteCard'
+			WHEN p.Name = '180 РґРЅРё Visa Р‘СЏР»Р° РљР°СЂС‚Р°'
+				THEN 'WhiteCard'
+			WHEN p.Name = 'РђРІР°РЅСЃ Р‘Р“ РџРѕС‰Рё'
+				THEN 'WhiteCard'
+			WHEN p.Name = 'Visa Free ATM World'
+				THEN 'WhiteCard'
+			WHEN p.Name = 'Р‘СЏР»Р° РљР°СЂС‚Р° Test'
+				THEN 'WhiteCard'
+			WHEN p.Name = 'Р‘СЏР»Р° РљР°СЂС‚Р°'
+				THEN 'WhiteCard'
+			WHEN p.Name = 'Р‘СЏР»Р° РљР°СЂС‚Р° 2'
+				THEN 'WhiteCard'
+			WHEN p.Name = 'Р‘СЏР»Р° РљР°СЂС‚Р° FastCash'
+				THEN 'WhiteCard'
+			WHEN p.Name = 'Р‘СЏР»Р° РљР°СЂС‚Р° вЂ“ СЃР°РјРѕ Р»РёС…РІР°'
+				THEN 'WhiteCard'
+			WHEN p.Name = 'Visa Р‘СЏР»Р° РљР°СЂС‚Р° - SC'
+				THEN 'WhiteCard'
+			WHEN p.Name = 'Р‘СЏР»Р° РљР°СЂС‚Р° Gold - 10%'
+				THEN 'WhiteCard-Gold'
+			WHEN p.Name = 'Р‘СЏР»Р° РљР°СЂС‚Р° Gold - 5%'
+				THEN 'WhiteCard-Gold'
+			WHEN p.Name = 'Р‘СЏР»Р° РљР°СЂС‚Р° Gold-MFG-5%'
+				THEN 'WhiteCard-Gold'
+			WHEN p.Name = 'AXI 2'
+				THEN 'WhiteCard-Gold'
+			WHEN p.Name = 'AXI 2-500'
+				THEN 'WhiteCard-Gold' 
+			WHEN p.Name = 'Axi Card - test'
+				THEN 'WhiteCard-Gold' 
+			WHEN p.Name = 'A1 Credit 1'
+				THEN 'A1 Credit'
+			WHEN p.Name = 'A1 Credit 2'
+				THEN 'A1 Credit'
+			WHEN p.Name = 'Рђ1 РїРѕС‚СЂРµР±РёС‚РµР»СЃРєРё Р‘РµР· Р“Р”'
+				THEN 'A1 Consumer Loan-Cheap'
+			WHEN p.Name = 'Рђ1 РїРѕС‚СЂРµР±РёС‚РµР»СЃРєРё Р“Р”'
+				THEN 'A1 Consumer Loan-Expensive'
+			WHEN p.Name = 'Axi Credit 2'
+				THEN 'Axi Credit'
+			WHEN p.Name = 'Axi Credit 3'
+				THEN 'Axi Credit'
+			WHEN p.Name = 'Axi Credit 4'
+				THEN 'Axi Credit'
+			WHEN p.Name = 'Axi Credit 4 - paper'
+				THEN 'Axi Credit'
+			ELSE p.Name
+		END AS Product
+		, fo.CDATE
+		, Amount
+		, RANK() OVER(PARTITION BY EasyClientNumber ORDER BY ActivationDate ASC) AS tr
+					FROM dwh.FactFinanceOperations fo
+					JOIN dwh.DimCards dc ON dc.OfferSK = fo.OfferSK
+				    JOIN dwh.DimOffers do ON do.OfferSK = dc.OfferSK
+					JOIN dwh.DimProduct p ON p.ProductSK = do.ProductSK
+					WHERE FinOperationSK = '73' 
+						--AND CONVERT(DATE, fo.CDATE, 4) BETWEEN '2022-04-01' AND DATEADD(day, -1, CAST(GETDATE() AS date))
+						AND CONVERT(DATE, fo.CDATE, 4) >= @FirstOfMonth 
+						AND CONVERT(DATE, fo.CDATE, 4) <= @CurrentDate
+						AND ActivationDate IS NOT NULL
+						--AND EasyClientNumber = 555004
+		) AS Result
+		where tr = 1
+		  GROUP BY Product
+		  , CONVERT(DATE, CDATE)
+		  , EasyClientNumber
+		  , tr
+		-- ORDER BY EasyClientNumber, Date
+
+")
+    start_time <- Sys.time()
+    Payments_all_BG <- DBI::dbFetch(DBI::dbSendQuery(myc, Payments_all_BG))
+    print(paste("Done in", round(difftime(Sys.time(), start_time,unit = "mins"),2), "minutes"))
+    
+    #Close the database connection
+    DBI::dbDisconnect(myc)
+    
+  }
+  
+  #DateTable
+  {
+    FirstDateOfMonth = min(as.Date(Payments_all_BG$Date))
+    
+    DateForFile = format(FirstDateOfMonth, "%m.%Y")
+    
+    Yesterday = Sys.Date()-1
+    
+    Dates_DF = data.frame(FirstDateOfMonth = as.Date(FirstDateOfMonth)
+                          ,NextDate = seq(as.Date(FirstDateOfMonth)
+                                          , ceiling_date(as.Date(FirstDateOfMonth)
+                                                         , unit = "months")-1
+                                          , by="days")) 
+    
+    #write_xlsx(Dates_DF,"./Output Data/Dates_R.xlsx")
+  }
+  
+  #ReadMaturedClients_BG
+  {
+    
+    files_MaturedClients_BG <- list.files(path = "J:/BAR/R Scripts/Rscript_Colletion_Automation/Input Data/Matured_Clients/Matured_BG"
+                                          , pattern = "*.xlsx"
+                                          , full.names = T)
+    
+    
+    MaturedClients_BG <- sapply(files_MaturedClients_BG, read_excel, simplify=FALSE) %>% 
+      bind_rows() %>%
+      select(Product, CID, Bucket = `Bucket NEW`, MaturedMDPs = MDPNew) %>%
+      mutate(MaturedMDPs = as.numeric(MaturedMDPs)) %>%
+      ungroup() %>%
+      mutate(FirstDateOfMonth = FirstDateOfMonth) %>%
+      left_join(Dates_DF, by = "FirstDateOfMonth") %>%
+      mutate(Product = ifelse(Product == "Visa Free ATM World", "WhiteCard"
+                              ,ifelse(Product == "Visa Р‘СЏР»Р° РєР°СЂС‚Р°", "WhiteCard"
+                                      ,ifelse(Product == "Р‘СЏР»Р° РљР°СЂС‚Р°", "WhiteCard"
+                                              ,ifelse(Product == "РРђРњ", "WhiteCard"
+                                                      ,ifelse(Product == "Р‘СЏР»Р° РљР°СЂС‚Р° вЂ“ СЃР°РјРѕ Р»РёС…РІР°", "WhiteCard-Only Intrest"
+                                                              ,ifelse(Product == "AXI 2", "WhiteCard-Gold"
+                                                                      ,ifelse(Product == "AXI 2-500", "WhiteCard-Gold"
+                                                                              ,ifelse(Product == "Р‘СЏР»Р° РљР°СЂС‚Р° Gold - 10%", "WhiteCard-Gold"
+                                                                                      ,ifelse(Product == "Р‘СЏР»Р° РљР°СЂС‚Р° Gold - 5%", "WhiteCard-Gold"
+                                                                                              ,ifelse(Product == "Р‘СЏР»Р° РљР°СЂС‚Р° Gold-MFG-5%", "WhiteCard-Gold"
+                                                                                                      ,ifelse(Product == "Visa Р‘СЏР»Р° РљР°СЂС‚Р° - SC", "WhiteCard"
+                                                                                                              ,ifelse(Product == "A1 - 8.5%", "A1"
+                                                                                                                      ,ifelse(Product == "Р‘СЏР»Р° РљР°СЂС‚Р° 2", "WhiteCard"
+                                                                                                                              ,Product))))))))))))))
+    
+    MaturedClients_BG_Sec = MaturedClients_BG %>%
+      mutate(Product = ifelse(Product == "Visa Free ATM World", "WhiteCard"
+                              ,ifelse(Product == "Visa Р‘СЏР»Р° РєР°СЂС‚Р°", "WhiteCard"
+                                      ,ifelse(Product == "Р‘СЏР»Р° РљР°СЂС‚Р°", "WhiteCard"
+                                              ,ifelse(Product == "РРђРњ", "WhiteCard"
+                                                      ,ifelse(Product == "Р‘СЏР»Р° РљР°СЂС‚Р° вЂ“ СЃР°РјРѕ Р»РёС…РІР°", "WhiteCard-Only Intrest"
+                                                              ,ifelse(Product == "AXI 2", "WhiteCard-Gold"
+                                                                      ,ifelse(Product == "AXI 2-500", "WhiteCard-Gold"
+                                                                              ,ifelse(Product == "Р‘СЏР»Р° РљР°СЂС‚Р° Gold - 10%", "WhiteCard-Gold"
+                                                                                      ,ifelse(Product == "Р‘СЏР»Р° РљР°СЂС‚Р° Gold - 5%", "WhiteCard-Gold"
+                                                                                              ,ifelse(Product == "Р‘СЏР»Р° РљР°СЂС‚Р° Gold-MFG-5%", "WhiteCard-Gold"
+                                                                                                      ,ifelse(Product == "Visa Р‘СЏР»Р° РљР°СЂС‚Р° - SC", "WhiteCard"
+                                                                                                              ,ifelse(Product == "A1 - 8.5%", "A1"
+                                                                                                                      ,ifelse(Product == "Р‘СЏР»Р° РљР°СЂС‚Р° 2", "WhiteCard"
+                                                                                                                              ,Product)))))))))))))) %>%
+      
+      unite(VLookUPCondition, c(Product, Bucket), sep = "-Bucket ") %>%
+      group_by(VLookUPCondition, NextDate) %>%
+      summarise(MaturedMDPs = length(MaturedMDPs)) %>%
+      rename(MauterdClients = MaturedMDPs)
+    
+  }
+  
+  #Base BG
+  {
+    
+    Base_Colletion = MaturedClients_BG %>%
+      left_join(Dates_DF, by =  "NextDate") %>%
+      left_join(Payments_all_BG %>% mutate(Date = as.Date(Date)) 
+                , by = c("CID" = "EasyClientNumber"
+                         ,"NextDate" = "Date" )) %>%
+      mutate(Amount = ifelse(is.na(Amount),0,Amount)) %>% 
+      arrange(CID, NextDate) %>%
+      group_by(CID) %>%
+      mutate(cumulative = cumsum(Amount)) %>%
+      ungroup() %>%
+      mutate(Is_paid_Customer = ifelse(round(MaturedMDPs,2) <= round(cumulative,2),1,0)
+             , Is_paid_mdp = ifelse(Is_paid_Customer == 1, MaturedMDPs, 0)) %>%
+      arrange(CID) %>%
+      group_by(CID) %>%
+      mutate(Double_payment_CHECK = cumsum(Is_paid_Customer)) %>%
+      ungroup() 
+  }
+  
+  #Results Colletion BG
+  {
+    #PaidClients_WhiteCard
+    {
+      
+      Collection_BG_Paid_Clients = Base_Colletion %>%
+        filter(NextDate >= FirstDateOfMonth & NextDate <= Yesterday) %>%
+        unite(VLookUPCondition, c(Product.x, Bucket), sep = "-Bucket ") %>%
+        group_by(VLookUPCondition, NextDate) %>%
+        summarise(Is_paid_Customer = sum(Is_paid_Customer)) %>%
+        left_join(MaturedClients_BG_Sec, by = "VLookUPCondition", "NextDate") %>%
+        mutate(Result = Is_paid_Customer / MauterdClients) %>%
+        select(VLookUPCondition, NextDate = NextDate.x, Result) %>%
+        group_by(VLookUPCondition, NextDate) %>%
+        filter(duplicated(NextDate) == FALSE) %>%
+        dcast(VLookUPCondition ~ NextDate)
+      
+      
+      
+      Collection_BG_Paid_Clients_WhiteCard_Total = Base_Colletion %>%
+        filter(NextDate >= FirstDateOfMonth & NextDate <= Yesterday
+               ,Product.x %in% c("WhiteCard", "WhiteCard-Only Intrest")) %>%
+        unite(VLookUPCondition, c(Product.x, Bucket), sep = "-Bucket ") %>%
+        group_by(VLookUPCondition, NextDate) %>%
+        summarise(Is_paid_Customer = sum(Is_paid_Customer)) %>%
+        left_join(MaturedClients_BG_Sec, by = "VLookUPCondition", "NextDate") %>%
+        mutate(VLookUPCondition = str_replace_all(VLookUPCondition, "-Only Intrest", "")
+               ,VLookUPCondition = str_replace_all(VLookUPCondition, "WhiteCard", "WhiteCard_Total")) %>%
+        group_by(VLookUPCondition, NextDate.x) %>%
+        summarise(Is_paid_Customer = sum(Is_paid_Customer)
+                  ,MauterdClients = sum(MauterdClients)) %>%
+        ungroup() %>%
+        mutate(Result = Is_paid_Customer / MauterdClients) %>%
+        select(VLookUPCondition, NextDate = NextDate.x, Result) %>%
+        group_by(VLookUPCondition, NextDate) %>%
+        filter(duplicated(NextDate) == FALSE) %>%
+        dcast(VLookUPCondition ~ NextDate)
+      
+      Collection_BG_Bind = Collection_BG_Paid_Clients %>%
+        bind_rows(Collection_BG_Paid_Clients_WhiteCard_Total)
+      
+      
+      
+    }
+  }
+  
+  write_xlsx(Collection_BG_Bind, paste0("J:/BAR/R Scripts/Rscript_Colletion_Automation/Output Data/Collection_Files_Excel/Collection_BG_"
+                                        , Date_For_File
+                                        ,".xlsx"))
+}
+
+
+#Colletion Poland
+{
+  
+  #PaymentsQuerry
+  {
+    
+    myc <- DBI::dbConnect(odbc::odbc()
+                          , driver = "SQL Server"
+                          , server = "scorpio.smartitbg.int"
+                          , database = "BIsmartWCPL"
+    )
+    
+    Payments_all_PL <- paste0(" declare @CurrentDate date = getdate();
+declare @FirstOfMonth date = case when day(getdate())=1 then DATEADD(DAY,1,EOMONTH(@CurrentDate,-2)) else DATEADD(DAY,1,EOMONTH(@CurrentDate,-1)) end; 
+
+
+    SELECT EasyClientNumber
+	, CONVERT(DATE, CDATE) AS [Date]
+	, Product
+	, SUM(Amount) AS Amount
+	FROM (SELECT 
+	EasyClientNumber,
+	CASE 
+	WHEN p.Name = 'Axi Card PL'
+	THEN 'AXI PL'
+		WHEN p.Name = 'Axi Card PL 2'
+	THEN 'AXI PL'
+			WHEN p.Name = 'Axi Card PL 3 ST'
+	THEN 'AXI PL'
+ELSE p.Name
+END AS Product, 
+	Notes, 
+	fo.CDATE, 
+	Amount,
+	RANK() OVER(PARTITION BY EasyClientNumber  
+                                ORDER BY ActivationDate DESC) AS tr2
+			FROM dwh.FactFinanceOperations fo
+			JOIN dwh.DimCards dc ON dc.OfferSK = fo.OfferSK
+			JOIN dwh.DimPaymentPartners pp ON pp.PaymentPartnersSK = fo.PaymentPartnersSK
+			JOIN dwh.DimOffers do ON do.OfferSK = dc.OfferSK
+			JOIN dwh.DimProduct p ON p.ProductSK = do.ProductSK
+			WHERE FinOperationSK = '1' 
+				AND CONVERT(DATE, fo.CDATE, 4) >= @FirstOfMonth 
+				AND CONVERT(DATE, fo.CDATE, 4) <= @CurrentDate
+				AND ActivationDate IS NOT NULL
+			) AS Result
+			where tr2 = 1 	
+  GROUP BY Product
+  ,CONVERT(DATE, CDATE)
+  , EasyClientNumber
+  ORDER BY Date
+  , Product
+
+
+
+")
+    start_time <- Sys.time()
+    Payments_all_PL <- DBI::dbFetch(DBI::dbSendQuery(myc, Payments_all_PL))
+    print(paste("Done in", round(difftime(Sys.time(), start_time,unit = "mins"),2), "minutes"))
+    
+    #Close the database connection
+    DBI::dbDisconnect(myc)
+    
+  }
+  
+  
+  #Date Table
+  {
+    FirstDateOfMonth = min(as.Date(Payments_all_PL$Date))
+    
+    Yesterday = Sys.Date()-1
+    
+    Dates_DF = data.frame(FirstDateOfMonth = as.Date(FirstDateOfMonth)
+                          ,NextDate = seq(as.Date(FirstDateOfMonth)
+                                          , ceiling_date(as.Date(FirstDateOfMonth)
+                                                         , unit = "months")-1
+                                          , by="days"))
+  }
+  
+  #ReadMaturedClients_PL
+  {
+    
+    files_MaturedClients_PL <- list.files(path = "J:/BAR/R Scripts/Rscript_Colletion_Automation/Input Data/Matured_Clients/Matured_PL"
+                                          , pattern = "*.xlsx"
+                                          , full.names = T)
+    
+    
+    MaturedClients_PL <- sapply(files_MaturedClients_PL, read_excel, simplify=FALSE) %>% 
+      bind_rows() %>%
+      select(Product, CID, Bucket = `Bucket NEW`, MaturedMDPs = MDPNew) %>%
+      mutate(MaturedMDPs = as.numeric(MaturedMDPs)) %>%
+      ungroup() %>%
+      mutate(FirstDateOfMonth = FirstDateOfMonth) %>%
+      left_join(Dates_DF, by = "FirstDateOfMonth") %>%
+      mutate(Product = ifelse(Product == "Axi Card PL", "AXI PL"
+                              ,ifelse(Product == "Axi test", "AXI PL"
+                                      ,ifelse(Product == "Axi test 2", "AXI PL"
+                                              ,Product)))) 
+    
+    
+    MaturedClients_PL_Sec = MaturedClients_PL %>%
+      mutate(Product = ifelse(Product == "Axi Card PL", "AXI PL"
+                              ,ifelse(Product == "Axi test", "AXI PL"
+                                      ,ifelse(Product == "Axi test 2", "AXI PL"
+                                              ,Product))))  %>%
+      unite(VLookUPCondition, c(Product, Bucket), sep = "-Bucket ") %>%
+      group_by(VLookUPCondition, NextDate) %>%
+      summarise(MaturedMDPs = length(MaturedMDPs)) %>%
+      rename(MauterdClients = MaturedMDPs)
+    
+    
+  } 
+  
+  #Base PL
+  {
+    
+    Base_Colletion_PL = MaturedClients_PL %>%
+      left_join(Dates_DF, by =  "NextDate") %>%
+      left_join(Payments_all_PL %>% mutate(Date = as.Date(Date)) 
+                , by = c("CID" = "EasyClientNumber"
+                         ,"NextDate" = "Date" )) %>%
+      mutate(Amount = ifelse(is.na(Amount),0,Amount)) %>% 
+      arrange(CID, NextDate) %>%
+      group_by(CID) %>%
+      mutate(cumulative = cumsum(Amount)) %>%
+      ungroup() %>%
+      mutate(Is_paid_Customer = ifelse(round(MaturedMDPs,2) <= round(cumulative,2),1,0)
+             , Is_paid_mdp = ifelse(Is_paid_Customer == 1, MaturedMDPs, 0)) %>%
+      arrange(CID) %>%
+      group_by(CID) %>%
+      mutate(Double_payment_CHECK = cumsum(Is_paid_Customer)) %>%
+      ungroup() 
+  }
+  
+  #Collection Result PL  
+  {
+    
+    Collection_PL_Paid_Clients = Base_Colletion_PL %>%
+      filter(NextDate >= FirstDateOfMonth & NextDate <= Yesterday) %>%
+      unite(VLookUPCondition, c(Product.x, Bucket), sep = "-Bucket ") %>%
+      group_by(VLookUPCondition, NextDate) %>%
+      summarise(Is_paid_Customer = sum(Is_paid_Customer)) %>%
+      left_join(MaturedClients_PL_Sec, by = "VLookUPCondition", "NextDate") %>%
+      mutate(Result = Is_paid_Customer / MauterdClients) %>%
+      select(VLookUPCondition, NextDate = NextDate.x, Result) %>%
+      group_by(VLookUPCondition, NextDate) %>%
+      filter(duplicated(NextDate) == FALSE) %>%
+      dcast(VLookUPCondition ~ NextDate) %>%
+      rename(`Poland (numbers)`= VLookUPCondition)
+    
+    
+    
+    Collection_PL_Paid_MDP = Base_Colletion_PL %>%
+      filter(NextDate >= FirstDateOfMonth & NextDate <= Yesterday) %>%
+      unite(VLookUPCondition, c(Product.x, Bucket), sep = "-Bucket ") %>%
+      group_by(VLookUPCondition, NextDate) %>%
+      summarise(Is_paid_mdp = sum(Is_paid_mdp)
+                ,MaturedMDPs = sum(MaturedMDPs)) %>%
+      mutate(Result = Is_paid_mdp / MaturedMDPs) %>%
+      select(VLookUPCondition, NextDate, Result) %>%
+      group_by(VLookUPCondition, NextDate) %>%
+      filter(duplicated(NextDate) == FALSE) %>%
+      dcast(VLookUPCondition ~ NextDate)%>%
+      rename(`Poland (sum)` =VLookUPCondition)
+    
+    
+    ExcellFile_PL <- list("Collection_PL_Paid_Clients" = Collection_PL_Paid_Clients
+                          ,"Collection_PL_Paid_MDP" = Collection_PL_Paid_MDP)
+    
+    write_xlsx(ExcellFile_PL, paste0("J:/BAR/R Scripts/Rscript_Colletion_Automation/Output Data/Collection_Files_Excel/Collection_PL_"
+                                     , Date_For_File
+                                     ,".xlsx"))
+    
+    
+  }
+}
+
+
+#Collection Romania
+{
+  #PaymentsQuerry
+  {
+    myc <- DBI::dbConnect(odbc::odbc()
+                          , driver = "SQL Server"
+                          , server = "scorpio.smartitbg.int"
+                          , database = "BIsmartWCRO"
+    )
+    
+    Payments_all_RO <- paste0(" declare @CurrentDate date = getdate();
+declare @FirstOfMonth date = case when day(getdate())=1 then DATEADD(DAY,1,EOMONTH(@CurrentDate,-2)) else DATEADD(DAY,1,EOMONTH(@CurrentDate,-1)) end; 
+
+SELECT EasyClientNumber
+, CONVERT(DATE, CDATE) AS [Date]
+, CASE 
+    WHEN Product = 'AFR'
+		THEN 'Axi RO'
+    WHEN Product = 'AFR 2'
+		THEN 'Axi RO'
+    WHEN Product = 'AFR 3'
+		THEN 'Axi RO'
+	WHEN Product = 'AFR 2 - SC'
+		THEN 'Axi RO'
+	ELSE Product
+END AS Product
+, SUM(Amount) AS Amount
+	FROM (SELECT DISTINCT EasyClientNumber
+	, p.Name AS Product
+	, Notes
+	, fo.CDATE
+	, Amount
+			FROM dwh.FactFinanceOperations fo
+			JOIN dwh.DimCards dc ON dc.OfferSK = fo.OfferSK
+			JOIN dwh.DimPaymentPartners pp ON pp.PaymentPartnersSK = fo.PaymentPartnersSK
+			JOIN dwh.DimOffers do ON do.OfferSK = dc.OfferSK
+			JOIN dwh.DimProduct p ON p.ProductSK = do.ProductSK
+			WHERE FinOperationSK = '1' 
+			AND CONVERT(DATE, fo.CDATE, 4) >= @FirstOfMonth 
+			AND CONVERT(DATE, fo.CDATE, 4) <= @CurrentDate
+			AND ActivationDate IS NOT NULL
+			--and EasyClientNumber = 684466
+			) AS Result
+  GROUP BY --Notes,
+  EasyClientNumber
+  , Product
+  ,CONVERT(DATE, CDATE)
+  ORDER BY Date
+  , Product
+
+")
+    start_time <- Sys.time()
+    Payments_all_RO <- DBI::dbFetch(DBI::dbSendQuery(myc, Payments_all_RO))
+    print(paste("Done in", round(difftime(Sys.time(), start_time,unit = "mins"),2), "minutes"))
+    
+    #Close the database connection
+    DBI::dbDisconnect(myc)
+  }
+  
+  #Date Table
+  {
+    FirstDateOfMonth = min(as.Date(Payments_all_RO$Date))
+    
+    Yesterday = Sys.Date()-1
+    
+    Dates_DF = data.frame(FirstDateOfMonth = as.Date(FirstDateOfMonth)
+                          ,NextDate = seq(as.Date(FirstDateOfMonth)
+                                          , ceiling_date(as.Date(FirstDateOfMonth)
+                                                         , unit = "months")-1
+                                          , by="days"))
+  }
+  
+  
+  #ReadMaturedClients_RO
+  {
+    
+    files_MaturedClients_RO <- list.files(path = "J:/BAR/R Scripts/Rscript_Colletion_Automation/Input Data/Matured_Clients/Matured_RO"
+                                          , pattern = "*.xlsx"
+                                          , full.names = T)
+    
+    
+    MaturedClients_RO <- sapply(files_MaturedClients_RO, read_excel, simplify=FALSE) %>% 
+      bind_rows() %>%
+      select(Product, CID, Bucket = `Bucket NEW`, MaturedMDPs = MDPNew) %>%
+      mutate(MaturedMDPs = as.numeric(MaturedMDPs)) %>%
+      ungroup() %>%
+      mutate(FirstDateOfMonth = FirstDateOfMonth) %>%
+      left_join(Dates_DF, by = "FirstDateOfMonth") %>%
+      mutate(Product = ifelse(Product == "AFR", "AXI RO"
+                              ,ifelse(Product == "AFR 2", "AXI RO"
+                                      ,ifelse(Product == "AFR 2 - SC", "AXI RO"
+                                              ,ifelse(Product == "AFR 3", "AXI RO"
+                                                      ,Product))))) 
+    
+    
+    MaturedClients_RO_Sec = MaturedClients_RO %>%
+      mutate(Product = ifelse(Product == "AFR", "AXI RO"
+                              ,ifelse(Product == "AFR 2", "AXI RO"
+                                      ,ifelse(Product == "AFR 2 - SC", "AXI RO"
+                                              ,ifelse(Product == "AFR 3", "AXI RO"
+                                                      ,Product)))))  %>%
+      unite(VLookUPCondition, c(Product, Bucket), sep = "-Bucket ") %>%
+      group_by(VLookUPCondition, NextDate) %>%
+      summarise(MaturedMDPs = length(MaturedMDPs)) %>%
+      rename(MauterdClients = MaturedMDPs)
+    
+    
+  } 
+  
+  
+  #Base RO
+  {
+    
+    Base_Colletion_RO = MaturedClients_RO %>%
+      left_join(Dates_DF, by =  "NextDate") %>%
+      left_join(Payments_all_RO %>% mutate(Date = as.Date(Date)) 
+                , by = c("CID" = "EasyClientNumber"
+                         ,"NextDate" = "Date" )) %>%
+      mutate(Amount = ifelse(is.na(Amount),0,Amount)) %>% 
+      arrange(CID, NextDate) %>%
+      group_by(CID) %>%
+      mutate(cumulative = cumsum(Amount)) %>%
+      ungroup() %>%
+      mutate(Is_paid_Customer = ifelse(MaturedMDPs <= cumulative,1,0)
+             , Is_paid_mdp = ifelse(Is_paid_Customer == 1, MaturedMDPs, 0)) %>%
+      arrange(CID) %>%
+      group_by(CID) %>%
+      mutate(Double_payment_CHECK = cumsum(Is_paid_Customer)) %>%
+      ungroup() 
+    
+    
+  }
+  
+  #Collection Result PL  
+  {
+    
+    Collection_RO_Paid_Clients = Base_Colletion_RO %>%
+      filter(NextDate >= FirstDateOfMonth & NextDate <= Yesterday) %>%
+      unite(VLookUPCondition, c(Product.x, Bucket), sep = "-Bucket ") %>%
+      group_by(VLookUPCondition, NextDate) %>%
+      summarise(Is_paid_Customer = sum(Is_paid_Customer)) %>%
+      left_join(MaturedClients_RO_Sec, by = "VLookUPCondition", "NextDate") %>%
+      mutate(Result = Is_paid_Customer / MauterdClients) %>%
+      select(VLookUPCondition, NextDate = NextDate.x, Result) %>%
+      group_by(VLookUPCondition, NextDate) %>%
+      filter(duplicated(NextDate) == FALSE) %>%
+      dcast(VLookUPCondition ~ NextDate) %>%
+      rename(`Romania (numbers)`= VLookUPCondition)
+    
+    
+    #write_xlsx(Base_Colletion_RO, "J:/Reports/Week_report/Rscript_Colletion_Automation/Output Data/TestRO.xlsx")
+    
+    Collection_RO_Paid_MDP = Base_Colletion_RO %>%
+      filter(NextDate >= FirstDateOfMonth & NextDate <= Yesterday) %>%
+      unite(VLookUPCondition, c(Product.x, Bucket), sep = "-Bucket ") %>%
+      group_by(VLookUPCondition, NextDate) %>%
+      summarise(Is_paid_mdp = sum(Is_paid_mdp)
+                ,MaturedMDPs = sum(MaturedMDPs)) %>%
+      mutate(Result = Is_paid_mdp / MaturedMDPs) %>%
+      select(VLookUPCondition, NextDate, Result) %>%
+      group_by(VLookUPCondition, NextDate) %>%
+      filter(duplicated(NextDate) == FALSE) %>%
+      dcast(VLookUPCondition ~ NextDate)%>%
+      rename(`Romania (sum)` = VLookUPCondition)
+    
+    
+    ExcellFile_RO <- list("Collection_RO_Paid_Clients" = Collection_RO_Paid_Clients
+                          ,"Collection_RO_Paid_MDP" = Collection_RO_Paid_MDP)
+    
+    write_xlsx(ExcellFile_RO, paste0("J:/BAR/R Scripts/Rscript_Colletion_Automation/Output Data/Collection_Files_Excel/Collection_RO_"
+                                     , Date_For_File
+                                     ,".xlsx"))
+    
+    
+  }
+}
