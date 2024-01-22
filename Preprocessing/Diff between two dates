@@ -1,0 +1,35 @@
+# Load the necessary tidyverse library
+library(tidyverse)
+
+# Define the input and output file paths
+input <- "C:/Users/aleksandar.dimitrov/Desktop/INFOLITICA/IFRS 9 ПОДГОТОВКА/loan_data_2007_2014.csv"
+output <- "C:/Users/aleksandar.dimitrov/Desktop/INFOLITICA/IFRS 9 ПОДГОТОВКА/loan_data_2007_2014.rds"
+
+# Read the data from the CSV file
+data_csv <- read.csv(input)
+
+# Save the data as an RDS file
+saveRDS(data_csv, output_rds)
+
+# Read the data from the RDS file
+loan_data <- readRDS(output_rds) 
+
+# Check the class of the 'earliest_cr_line' column in loan_data
+class(loan_data$earliest_cr_line)
+
+# Perform any necessary data transformation on 'earliest_cr_line'
+loan_data$earliest_cr_line <- my(loan_data$earliest_cr_line)
+
+# Define the current date
+current_date <- as.Date("2024-01-22")
+
+# Calculate the difference between 'current_date' and 'earliest_cr_line' and format it as a string with "days"
+result <- current_date - loan_data$earliest_cr_line
+result <- paste(result, "days")
+
+# Add a new column 'No_days' to 'loan_data' containing the calculated result
+loan_data <- loan_data %>%
+  mutate(No_days = result)
+
+# Display the modified 'loan_data' with the new column
+loan_data
