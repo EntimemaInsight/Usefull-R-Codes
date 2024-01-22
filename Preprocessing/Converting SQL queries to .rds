@@ -1,0 +1,66 @@
+library(odbc)
+library(tidyverse)
+
+# SET A TIME PERIOD
+
+start_date <- as.Date('2023-12-01')
+end_date <- as.Date('2023-12-30')
+
+# Add output link
+
+output <- "C:/Users/aleksandar.dimitrov/Desktop/INFOLITICA/IFRS 9 ПОДГОТОВКА/data_sql.rds"
+
+
+# SQL Queries Loading
+
+server = "Scorpio"
+database = "BIsmartWCBG"
+
+conn <- dbConnect(odbc::odbc(), 
+                  driver = "ODBC Driver 17 for SQL Server", 
+                  server = server, 
+                  database = database, 
+                  Trusted_Connection = "Yes")
+
+sql_query <- paste("
+  DECLARE @StartDate DATE = '", start_date, "';
+  DECLARE @EndDate DATE = '", end_date, "';
+
+  SELECT 
+    DimOff.ContractNumber AS EasyClientNumber,
+    CONVERT(DATE, DimOff.DateClosed) AS Date,
+    DimPr.Name AS Product,
+    DimCR.Code AS CloseReason,
+    COUNT(*) AS Count 
+  FROM dwh.DimOffers AS DimOff
+  JOIN dwh.DimOffCloseReason AS DimCR ON DimCR.CloseReasonSK = DimOff.CloseReasonSK
+  JOIN dwh.DimProduct AS DimPr ON DimPr.ProductSK = DimOff.ProductSK
+  WHERE DimCR.CloseReasonSK BETWEEN 1 AND 3 
+    AND CONVERT(DATE, DimOff.DateClosed) BETWEEN @StartDate AND @EndDate
+  GROUP BY DimOff.ContractNumber, DimPr.Name, DimCR.Code, CONVERT(DATE, DimOff.DateClosed);
+", collapse = "")
+
+conn <- dbConnect(odbc::odbc(), 
+                  driver = "ODBC Driver 17 for SQL Server", 
+                  server = server, 
+                  database = database, 
+                  Trusted_Connection = "Yes")
+
+data_sql <- dbGetQuery(conn, sql_query)
+
+
+# Save the data as an RDS file
+
+saveRDS(data_sql, output)
+
+# Read the data from the RDS file
+
+data <- readRDS(output)
+
+data
+
+
+
+
+
+
