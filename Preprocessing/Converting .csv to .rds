@@ -1,0 +1,17 @@
+# Load the necessary tidyverse library
+library(tidyverse)
+
+# Define the input and output file paths
+input <- "C:/Users/aleksandar.dimitrov/Desktop/INFOLITICA/IFRS 9 ПОДГОТОВКА/loan_data_2007_2014.csv"
+output <- "C:/Users/aleksandar.dimitrov/Desktop/INFOLITICA/IFRS 9 ПОДГОТОВКА/loan_data_2007_2014.rds"
+
+# Read the data from the CSV file
+data_csv <- read.csv(input)
+
+# Save the data as an RDS file
+saveRDS(data_csv, output_rds)
+
+# Read the data from the RDS file
+loan_data <- readRDS(output_rds) 
+
+..................................................................
