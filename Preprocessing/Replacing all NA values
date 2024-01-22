@@ -1,0 +1,10 @@
+library(tidyverse)
+
+# Replaysing all missing values with 0 in the entire DataFrame 
+data <- data %>%
+  mutate(across(everything(), ~ifelse(is.na(.), 0, .)))
+
+
+# Replaysing all missing values with #N/A in the entire DataFrame 
+data <- data %>%
+  mutate(across(everything(), ~ifelse(is.na(.), "#NA", .)))
