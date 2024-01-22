@@ -1,0 +1,5 @@
+# Using the gsub function to replace "Hello" with "Hi"
+
+text <- "Hello, World! This is a test."
+
+result <- gsub("Hello", "Hi", text)
