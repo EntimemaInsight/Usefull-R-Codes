@@ -1,4 +1,4 @@
-# lubridate loading (lubridate is a part from tidyverse)
+# lubridate loading (lubridate is a part from tidyverse !)
 library(tidyverse)
 
 # Sample strings
