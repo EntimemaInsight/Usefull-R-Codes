@@ -19,10 +19,9 @@ suppressMessages({
 library(tidyverse) 
 })
 
+setwd("C:/Users/aleksandar.dimitrov/Desktop/INFOLITICA/IFRS 9 ПОДГОТОВКА")
 
-input <- "C:/Users/aleksandar.dimitrov/Desktop/INFOLITICA/IFRS 9 ПОДГОТОВКА/employee-data.csv"
-
-data <- read.csv(input) %>% 
+data <- read.csv("employee-data.csv") %>% 
   as.tibble()
 
 data
@@ -33,10 +32,9 @@ suppressMessages({
 library(readxl) 
 })
 
+setwd("C:/Users/aleksandar.dimitrov/Desktop/INFOLITICA")
 
-input <- "C:/Users/aleksandar.dimitrov/Desktop/INFOLITICA/Usage_10.12.2023.xlsx"
-
-data <- read_excel(input) %>% 
+data <- read_excel("Usage_10.12.2023.xlsx") %>% 
   as.tibble()
 
 data
