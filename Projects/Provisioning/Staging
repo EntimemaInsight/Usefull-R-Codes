@@ -1,0 +1,163 @@
+data <- input_data_IDEA_Banking %>%
+  mutate(
+    start_date = dmy(start_date),
+    maturity_date = dmy(maturity_date),
+    reporting_date = as.Date("2019-12-31"),
+    loss_allowance = as.numeric(gsub("[[:space:]]", '', loss_allowance)),
+    overdue_amount = as.numeric(gsub('[[:space:]]', '', overdue_amount)),
+    overdue_amount = ifelse(is.na(overdue_amount), 0, overdue_amount),
+    total_onbalance_exposure = as.numeric(gsub('[:space:]]', '', total_onbalance_exposure)),
+    total_offbalance_exposure = as.numeric(gsub('[[:space:]]', '', total_offbalance_exposure)),
+    credit_conversion_factor = as.numeric(gsub('[[:space:]]', '', credit_conversion_factor)),
+    lgd = as.numeric(sub("%", "",(gsub('[[:space:]]', '', lgd)))) / 100,
+    eir = as.numeric(gsub('[[:space:]]', '', eir)) / 100,
+    Revolving = ifelse(receivable_identifier %in% Exposures_with_repayment_schedules, 0, 1))
+
+sum(data$total_offbalance_exposure)
+unique(data$overdue_amount)
+unique(data$forborne_status)
+
+wut <- data %>%
+  filter(Revolving == 0)
+
+Staging <- data %>%
+  mutate(Staging_Ours = case_when(
+    is.na(overdue_amount) == 1 | overdue_amount <= 30 ~ "S1",
+    maximum_currentdpd > 90 & is.na(overdue_amount) == 0 & overdue_amount > 30 ~ "S3",
+    credit_risk_rating_code == "R6" ~ "S3",
+    forborne_status == "FNPE" ~ "S3",
+    #flag_default == "D" ~ "S3",
+    FLAG_INSOLVENTA == 1 ~ "S3",
+    FLAG_DOB_STOPATA == "dob_stopata" ~ "S3",
+    maximum_currentdpd > 30 & is.na(overdue_amount) == 0 & overdue_amount > 30 ~ "S2",
+    forborne_status == "FPE" ~ "S2",
+    watch_list_status == "1" ~ "S2",
+    client_rating_on_approval == "A" & client_internal_rating_code %in% c("C", "D", "E") ~ "S2",
+    client_rating_on_approval == "B" & client_internal_rating_code %in% c("D", "E") ~ "S2",
+    client_rating_on_approval == "C" & client_internal_rating_code %in% c("E") ~ "S2",
+    TRUE ~ "S1"
+  ))
+
+table(Staging$client_rating_on_approval)
+table(Staging$watch_list_status)
+
+
+
+xxx <- Staging %>%
+  filter(client_rating_on_approval == "E")
+
+Client_level_contamination_S3 <- Staging %>%
+  group_by(client_id) %>%
+  summarise(Contaminated = max(provisioning_stage_code)) %>%
+  ungroup() %>%
+  mutate(Contaminated = ifelse(Contaminated == "S3", "S3", "S1"))
+
+Staging <- left_join(Staging, Client_level_contamination_S3, by = "client_id") %>%
+  mutate(Staging_Ours = pmax(Staging_Ours, Contaminated))
+  
+
+Test_stage_ours_S3_Idea_NOT <- Staging %>%
+  filter(Staging_Ours != provisioning_stage_code,
+         Staging_Ours %in% c("S3"))
+
+write.csv(Test_stage_ours_S3_Idea_NOT, file = ".\\IDEA Ours is S3 Idea is not S3.csv")
+
+Test_stage_ours_not_S3_Idea_is <- Staging %>%
+  filter(Staging_Ours != provisioning_stage_code,
+         provisioning_stage_code %in% c("S3"))
+
+write.csv(Test_stage_ours_not_S3_Idea_is, file = ".\\IDEA Ours is not S3 Idea is S3.csv")
+
+Test_stage_ours_S2_Idea_NOT <- Staging %>%
+  filter(Staging_Ours != provisioning_stage_code,
+         Staging_Ours %in% c("S2"))
+write.csv(Test_stage_ours_S2_Idea_NOT, file = ".\\IDEA Ours is S2 Idea is not S2.csv")
+
+Test_stage_ours_not_S2_Idea_is <- Staging %>%
+  filter(Staging_Ours != provisioning_stage_code,
+         provisioning_stage_code %in% c("S2"))
+write.csv(Test_stage_ours_not_S2_Idea_is, file = ".\\IDEA Ours is not S2 Idea is S2.csv")
+
+
+
+wat <- Staging %>%
+  filter(client_id == 73251)
+
+
+
+data <- input_data_IDEA_Leasing %>%
+  mutate(
+    start_date = dmy(start_date),
+    maturity_date = dmy(maturity_date),
+    reporting_date = as.Date("2019-12-31"),
+    loss_allowance = as.numeric(gsub("[[:space:]]", '', loss_allowance)),
+    overdue_amount = as.numeric(gsub('[[:space:]]', '', overdue_amount)),
+    overdue_amount = ifelse(is.na(overdue_amount), 0, overdue_amount),
+    total_onbalance_exposure = as.numeric(gsub('[:space:]]', '', total_onbalance_exposure)),
+    #total_offbalance_exposure = as.numeric(gsub('[[:space:]]', '', total_offbalance_exposure)),
+    credit_conversion_factor = as.numeric(gsub('[[:space:]]', '', credit_conversion_factor)),
+    lgd = as.numeric(sub("%", "",(gsub('[[:space:]]', '', lgd)))) / 100,
+    eir = as.numeric(gsub('[[:space:]]', '', eir)) / 100,
+    Revolving = ifelse(receivable_identifier %in% Exposures_with_repayment_schedules, 0, 1))
+
+unique(data$overdue_amount)
+unique(data$forborne_status)
+
+Staging <- data %>%
+  mutate(Staging_Ours = case_when(
+    maximum_currentdpd > 90 & is.na(overdue_amount) == 0 & overdue_amount > 30 ~ "S3",
+    credit_risk_rating_code == "R6" ~ "S3",
+    forborne_status == "FNPE" ~ "S3",
+    #flag_default == "D" ~ "S3",
+    FLAG_INSOLVENTA == 1 ~ "S3",
+    FLAG_DOB_STOPATA == "dob_stopata" ~ "S3",
+    maximum_currentdpd > 30 & is.na(overdue_amount) == 0 & overdue_amount > 30 ~ "S2",
+    forborne_status == "FPE" ~ "S2",
+    watch_list_status == "1" ~ "S2",
+    client_rating_on_approval == "A" & client_internal_rating_code %in% c("C", "D", "E") ~ "S2",
+    client_rating_on_approval == "B" & client_internal_rating_code %in% c("D", "E") ~ "S2",
+    client_rating_on_approval == "C" & client_internal_rating_code %in% c("E") ~ "S2",
+    TRUE ~ "S1"
+  ),
+  provisioning_stage_code = case_when(
+    provisioning_stage_code == "STAGE3" ~ "S3",
+    provisioning_stage_code == "STAGE2" ~ "S2",
+    TRUE ~ "S1"
+  ))
+
+Client_level_contamination_S3 <- Staging %>%
+  group_by(client_id) %>%
+  summarise(Contaminated = max(provisioning_stage_code)) %>%
+  ungroup() %>%
+  mutate(Contaminated = ifelse(Contaminated == "S3", "S3", "S1"))
+
+Staging <- left_join(Staging, Client_level_contamination_S3, by = "client_id") %>%
+  mutate(Staging_Ours = pmax(Staging_Ours, Contaminated))
+
+
+Leasing_Test_stage_ours_S3_Idea_NOT <- Staging %>%
+  filter(Staging_Ours != provisioning_stage_code,
+         Staging_Ours %in% c("S3"))
+
+write.csv(Leasing_Test_stage_ours_S3_Idea_NOT, file = ".\\Leasing Ours is S3 Idea is not S3.csv")
+
+Leasing_Test_stage_ours_not_S3_Idea_is <- Staging %>%
+  filter(Staging_Ours != provisioning_stage_code,
+         provisioning_stage_code %in% c("S3"))
+
+write.csv(Leasing_Test_stage_ours_not_S3_Idea_is, file = ".\\Leasing Ours is not S3 Idea is S3.csv")
+
+Leasing_Test_stage_ours_S2_Idea_NOT <- Staging %>%
+  filter(Staging_Ours != provisioning_stage_code,
+         Staging_Ours %in% c("S2"))
+write.csv(Leasing_Test_stage_ours_S2_Idea_NOT, file = ".\\Leasing Ours is S2 Idea is not S2.csv")
+
+Leasing_Test_stage_ours_not_S2_Idea_is <- Staging %>%
+  filter(Staging_Ours != provisioning_stage_code,
+         provisioning_stage_code %in% c("S2"))
+write.csv(Leasing_Test_stage_ours_not_S2_Idea_is, file = ".\\Leasing Ours is not S2 Idea is S2.csv")
+
+unique(data$client_internal_rating_code)
+unique(data$client_rating_on_approval)
+
+
