@@ -1,0 +1,95 @@
+# Load libraries
+library(dplyr)
+library(readxl)
+library(lubridate)
+library(writexl)
+
+# Load encrypted data
+Data_Encrypted = read_xlsx("./Output Data/Data_Encrypted.xlsx")
+
+# Decrypt data
+Data_Decrypted = Data_Encrypted %>%
+  rowwise() %>%
+  mutate(DI = as_date(DI - 1000, origin = "1970-01-01")
+         , DA = as_date(DA - 1000, origin = "1970-01-01")
+         , CA = ifelse(CA == 10, "Yes","No")
+         , DAC = as_date(DAC - 1000, origin = "1970-01-01")
+         , DR = as_date(DR - 1000, origin = "1970-01-01")
+         , DRF = as_date(DRF - 1000, origin = "1970-01-01")
+         , DC = as_date(DC - 1000, origin = "1970-01-01")
+         , AD = as_date(AD - 1000, origin = "1970-01-01")
+         , DAD = as_date(DAD - 1000, origin = "1970-01-01")
+         , FPD = as_date(FPD - 1000, origin = "1970-01-01")
+         , FWD = as_date(FWD - 1000, origin = "1970-01-01")
+         , LDPF = as_date(LDPF - 1000, origin = "1970-01-01")
+         , MSA = exp(1)^MSA
+         , MBFP = exp(1)^MBFP
+         , FFR = exp(1)^FFR
+         , CCL = exp(1)^CCL
+         , PN = ifelse(PN == 1,"A1","WC")
+         , FS = case_when(FS == 1 ~ "Activated Card"
+                          , FS == 2 ~ "Approved"
+                          , FS == 3 ~ "Approved plus client consent"
+                          , FS == 4 ~ "Refused by Client"
+                          , FS == 5 ~ "Rejected"
+                          , FS == 6 ~ "Waiting for decision")
+         , BN = ifelse(BN == 5,0,1)
+         , BT = ifelse(BT == 5,0,1)
+         ) %>%
+  ungroup() %>%
+  mutate(FFR = case_when(FFRS == "P" ~ FFR
+                         , FFRS == "N" ~ FFR*(-1)
+                         , FFRS == "Z" ~ 0)) %>%
+  plyr::rename(c("DI" = "DateInserted"
+                 , "DA" = "DateApproved"
+                 , "CA" = "ContractAccepted"
+                 , "DAC" = "DateAccepted"
+                 , "DR" = "DateRejected"
+                 , "DRF" = "DateRefused"
+                 , "DC" = "DateClosed"
+                 , "AD" = "ActivationDate"
+                 , "DAD" = "DeactivationDate"
+                 , "FPD" = "First_Penalty_Date"
+                 , "FWD" = "First_Withdrawal_Date"
+                 , "LDPF" = "Last_Date_PF"
+                 , "MSA" = "MOB_Since_Activation"
+                 , "MBFP" = "MOB_Before_First_Penalty"
+                 , "FFR" = "Final_Financia_Result"
+                 , "CCL" = "Credit_Card_Limit"
+                 , "PN" = "Product_Name"
+                 , "FS" = "Final_Status"
+                 , "BN" = "Bad_At_9"
+                 , "BT" = "Bad_At_12"
+                 )
+               ) %>%
+  select(-FFRS)
+
+
+# Export Decrypted Data
+write_xlsx(Data_Decrypted,"./Output Data/020_Data_Decrypted.xlsx")
+
+# Examine stats related to the usable data for scoring 
+Sample_For_Scoring_A1 = Data_Decrypted %>%
+  filter(Product_Name == "A1"
+         & !is.na(First_Withdrawal_Date)
+         & ActivationDate <= as.Date("2019-09-30")
+  ) 
+
+sum(Sample_For_Scoring_A1$Bad_At_9)/nrow(Sample_For_Scoring_A1)
+sum(Sample_For_Scoring_A1$Bad_At_12)/nrow(Sample_For_Scoring_A1)
+
+
+Sample_For_Scoring_Full = Data_Decrypted %>%
+  filter(!is.na(First_Withdrawal_Date)
+         & ActivationDate <= as.Date("2019-09-30")
+  ) 
+
+sum(Sample_For_Scoring_Full$Bad_At_9)/nrow(Sample_For_Scoring_Full)
+sum(Sample_For_Scoring_Full$Bad_At_12)/nrow(Sample_For_Scoring_Full)
+
+
+
+
+
+
+
