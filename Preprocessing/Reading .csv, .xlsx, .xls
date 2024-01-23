@@ -1,5 +1,6 @@
+suppressMessages({
 library(tidyverse) 
-library(readxl)
+})
 
 # importing files eg: data.csv ,images.zip,config.txt 
 
@@ -14,7 +15,10 @@ list.files(input)
 
 # importing and reading .csv files
 
-library(tidyverse)
+suppressMessages({
+library(tidyverse) 
+})
+
 
 input <- "C:/Users/aleksandar.dimitrov/Desktop/INFOLITICA/IFRS 9 ПОДГОТОВКА/employee-data.csv"
 
