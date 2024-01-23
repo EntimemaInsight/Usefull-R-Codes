@@ -1,0 +1,7 @@
+library(tidyverse) 
+
+# Set begin of the month 
+Begin_date <- as.Date(floor_date(Sys.Date(), unit = "month"))
+
+# Set end of the month 
+End_date <- as.Date(ceiling_date(Sys.Date(), unit = "month") - 1)
