@@ -1,0 +1,209 @@
+# Load libraries
+library(dplyr)
+library(readr)
+library(writexl)
+library(lubridate)
+
+### --- Params Section --- ###
+
+# These parameters come from provisions
+
+Bucket1_PD = 0.107
+Bucket2_PD = 0.765
+
+Bucket1_3_Recovery = 0.58
+Bucket4_Recovery = 0.37
+Bucket5_Recovery = 0.29
+Bucket6_Recovery = 0.21
+Bucket7_Recovery = 0.08
+
+Bucket1_PD_A1 = 0.205
+Bucket2_PD_A1 = 0.949
+
+Bucket1_3_Recovery_A1 = 0.58
+Bucket4_Recovery_A1 = 0.37
+Bucket5_Recovery_A1 = 0.29
+Bucket6_Recovery_A1 = 0.21
+Bucket7_Recovery_A1 = 0.08
+
+
+# Load data
+myc <- DBI::dbConnect(odbc::odbc()
+                      , driver = "SQL Server"
+                      , server = "hidalgo.smartitbg.int"
+                      , database = "BIsmartWCBG"
+)
+
+Data_Query <- read_file('./SQL Queries/Sample_For_Scoring.sql')
+
+start_time <- Sys.time()
+Data <- DBI::dbFetch(DBI::dbSendQuery(myc, Data_Query))
+print(paste("Done in", round(difftime(Sys.time(), start_time,unit = "mins"),2), "minutes"))
+
+# Export Raw Data For Checks
+write_xlsx(Data, "./Output Data/Raw_Data.xlsx")
+
+# Load Cessions - This data is needed to be added to the repayments
+DebtSaleList <- list.files("\\\\10.254.1.4\\Files\\Analysis\\9. Personal folders\\Zhivko Kolev\\R Projects\\AutomatedReports\\Data\\002 WCBG Provisions\\DebtSale", full.names = TRUE)
+                           
+# Define function to import debt sale
+ImportDebtSale <- function(x) {
+  require(dplyr)
+  require(readr)
+  
+  specs <-  cols( EasyClientNumber = col_integer()
+                  ,PrincipalDue = col_double()
+                  ,Outstanding = col_double()
+                  ,SalesPrice = col_double()
+  )
+  
+  
+  X <- mutate(read_delim(file = x, delim = ';'
+                         ,col_types = specs
+                         , col_names = c('EasyClientNumber', 'PrincipalDue', 'Outstanding', 'SalesPrice')
+                         ,skip = 1)
+              )
+  
+  names(X) <- c('EasyClientNumber', 'PrincipalDue', 'Outstanding', 'SalesPrice')
+  X
+}
+
+# Read and format cession data
+
+DebtSaleListOfFiles = lapply(DebtSaleList, ImportDebtSale)
+
+DebtSaleDF = do.call(bind_rows,DebtSaleListOfFiles)
+
+DebtSaleDF_Final = DebtSaleDF %>%
+  select(EasyClientNumber, SalesPrice) %>%
+  distinct(EasyClientNumber,.keep_all = T)
+
+# Encrypt all the the data appart from EGN
+Data_Encrypted = Data %>%
+  filter(CreditCardLimit >= 50 & (MOB_Before_First_Penalty != 0 | is.na(MOB_Before_First_Penalty))) %>%
+  #top_n(10000, OfferSK) %>%
+  # Join data about sold accounts
+  left_join(DebtSaleDF_Final, by = "EasyClientNumber") %>%
+  # Fill numeric columns with 0 if NA
+  mutate(Total_Repaid_Amount = ifelse(is.na(Total_Repaid_Amount),0,Total_Repaid_Amount)
+         , SalesPrice = ifelse(is.na(SalesPrice),0,SalesPrice)
+         , Total_Withdrawn_Amount = ifelse(is.na(Total_Withdrawn_Amount),0,Total_Withdrawn_Amount)
+         , TotalDue = ifelse(is.na(TotalDue) | TotalDue < 0, 0, TotalDue)
+         ) %>%
+  rowwise() %>%
+  # Define financial result based on portfolio bucket (impairments based estimation for active accounts)
+  mutate(Final_Fin_Result = case_when(PF_Bucket == "No_History" ~ 0.1
+                                      , PF_Bucket == "Completed" ~  Total_Repaid_Amount + SalesPrice - Total_Withdrawn_Amount
+                                      , PF_Bucket == "PF_Bucket1" &  Name == "Visa Р‘СЏР»Р° РєР°СЂС‚Р°" ~ Total_Repaid_Amount - Total_Withdrawn_Amount + (1-Bucket1_PD)*TotalDue + Bucket1_PD*Bucket1_3_Recovery*TotalDue
+                                      , PF_Bucket == "PF_Bucket1" &  Name == "A1" ~ Total_Repaid_Amount - Total_Withdrawn_Amount + (1-Bucket1_PD_A1)*TotalDue + Bucket1_PD_A1*Bucket1_3_Recovery_A1*TotalDue
+                                      , PF_Bucket == "PF_Bucket2" &  Name == "Visa Р‘СЏР»Р° РєР°СЂС‚Р°" ~ Total_Repaid_Amount - Total_Withdrawn_Amount + (1-Bucket2_PD_A1)*TotalDue + Bucket2_PD*Bucket1_3_Recovery*TotalDue
+                                      , PF_Bucket == "PF_Bucket2" &  Name == "A1" ~ Total_Repaid_Amount - Total_Withdrawn_Amount + (1-Bucket2_PD_A1)*TotalDue + Bucket2_PD_A1*Bucket1_3_Recovery_A1*TotalDue
+                                      , PF_Bucket == "PF_Bucket3" &  Name == "Visa Р‘СЏР»Р° РєР°СЂС‚Р°" ~ Total_Repaid_Amount - Total_Withdrawn_Amount + Bucket1_3_Recovery*TotalDue
+                                      , PF_Bucket == "PF_Bucket3" &  Name == "A1" ~ Total_Repaid_Amount - Total_Withdrawn_Amount + Bucket1_3_Recovery_A1*TotalDue
+                                      , PF_Bucket == "PF_Bucket4" &  Name == "Visa Р‘СЏР»Р° РєР°СЂС‚Р°" ~ Total_Repaid_Amount - Total_Withdrawn_Amount + Bucket4_Recovery*TotalDue
+                                      , PF_Bucket == "PF_Bucket4" &  Name == "A1" ~ Total_Repaid_Amount - Total_Withdrawn_Amount + Bucket4_Recovery_A1*TotalDue
+                                      , PF_Bucket == "PF_Bucket5" &  Name == "Visa Р‘СЏР»Р° РєР°СЂС‚Р°" ~ Total_Repaid_Amount - Total_Withdrawn_Amount + Bucket5_Recovery*TotalDue
+                                      , PF_Bucket == "PF_Bucket5" &  Name == "A1" ~ Total_Repaid_Amount - Total_Withdrawn_Amount + Bucket5_Recovery_A1*TotalDue
+                                      , PF_Bucket == "PF_Bucket6" &  Name == "Visa Р‘СЏР»Р° РєР°СЂС‚Р°" ~ Total_Repaid_Amount - Total_Withdrawn_Amount + Bucket6_Recovery*TotalDue
+                                      , PF_Bucket == "PF_Bucket6" &  Name == "A1" ~ Total_Repaid_Amount - Total_Withdrawn_Amount + Bucket6_Recovery_A1*TotalDue
+                                      , PF_Bucket == "PF_Bucket7" &  Name == "Visa Р‘СЏР»Р° РєР°СЂС‚Р°" ~ Total_Repaid_Amount - Total_Withdrawn_Amount + Bucket7_Recovery*TotalDue
+                                      , PF_Bucket == "PF_Bucket7" &  Name == "A1" ~ Total_Repaid_Amount - Total_Withdrawn_Amount + Bucket7_Recovery_A1*TotalDue
+                                      , TRUE ~ 0.1
+                                      )
+         ) %>%
+  ungroup() %>%
+  # Make some initial transformations to financial result (in order to make possible log transformation later)
+  mutate(Final_Fin_Result = ifelse(Final_Fin_Result == 0, 0.1, Final_Fin_Result)
+         ,FFRS = case_when(Final_Fin_Result == 0.1 ~ "Z"
+                                           , Final_Fin_Result < 0.1 ~ "N"
+                                           , Final_Fin_Result > 0.1 ~ "P")
+         , Final_Fin_Result = ifelse(Final_Fin_Result < 0, Final_Fin_Result*(-1),Final_Fin_Result)
+         , MOB_Since_Activation = ifelse(MOB_Since_Activation == 0, 1, MOB_Since_Activation)
+         ) %>%
+  
+  # Convert Dates to numeric
+  mutate(DateInserted = as.numeric(as.Date(DateInserted))
+         , DateApproved = as.numeric(as.Date(DateApproved))
+         , DateAccepted = as.numeric(as.Date(DateAccepted))
+         , DateRejected = as.numeric(as.Date(DateRejected))
+         , DateRefused = as.numeric(as.Date(DateRefused))
+         , DateClosed = as.numeric(as.Date(DateClosed))
+         , ActivationDate = as.numeric(as.Date(ActivationDate))
+         , DeactivationDate = as.numeric(as.Date(DeactivationDate))
+         , First_Penalty_Date = as.numeric(as.Date(First_Penalty_Date))
+         , First_Withdrawal_Date = as.numeric(as.Date(First_Withdrawal_Date))
+         , Last_Date_PF = as.numeric(as.Date(Last_Date_PF))
+         , LastPayoffdate = as.numeric(as.Date(LastPayoffdate))
+  ) %>%
+  # Transform numeric variables with log transform (the inverse is exp(1)^VARIABLE)
+  mutate(CCL = log(CreditCardLimit)
+         , FFR = log(Final_Fin_Result)
+         , MOB_Since_Activation = log(MOB_Since_Activation)
+         , MOB_Before_First_Penalty = log(MOB_Before_First_Penalty)
+         ) %>%
+  # Add 1000 to numeric dates variables
+  mutate(DateInserted = DateInserted + 1000
+         , DateApproved = DateApproved + 1000
+         , DateAccepted = DateAccepted + 1000
+         , DateRejected = DateRejected + 1000
+         , DateRefused = DateRefused + 1000
+         , DateClosed = DateClosed + 1000
+         , ActivationDate = ActivationDate + 1000
+         , DeactivationDate = DeactivationDate + 1000
+         , First_Penalty_Date = First_Penalty_Date + 1000
+         , First_Withdrawal_Date = First_Withdrawal_Date + 1000
+         , Last_Date_PF = Last_Date_PF + 1000
+         ) %>%
+  # Encode variables contract accepted, product name, final status, bad flags (the nomenclature set here is needed for decoding)
+  mutate(ContractAccepted = ifelse(ContractAccepted==T,10,20)
+         , ContractAccepted = ifelse(is.na(ContractAccepted),20,ContractAccepted)
+         , PN = ifelse(Name == "A1", 1,2)
+         , FS = case_when(Final_Status == "Activated Card" ~ 1
+                          , Final_Status == "Approved" ~ 2
+                          , Final_Status == "Approved plus client consent" ~ 3
+                          , Final_Status == "Refused by Client" ~ 4
+                          , Final_Status == "Rejected" ~ 5
+                          , Final_Status == "Waiting for decision" ~ 6)
+         , BN = ifelse(Bad_At_9 == 0, 5, 10)
+         , BT = ifelse(Bad_At_12 == 0, 5, 10)
+         ) %>%
+  # Encode variable names
+  plyr::rename(c("OfferSK" = "OSK"
+                 , "EGN" = "CID"
+                 , "DateInserted" = "DI"
+                 , "DateApproved" = "DA"
+                 , "ContractAccepted" = "CA"
+                 , "DateAccepted" = "DAC"
+                 , "DateRejected" = "DR"
+                 , "DateRefused" = "DRF"
+                 , "DateClosed" = "DC"
+                 , "ActivationDate" = "AD"
+                 , "DeactivationDate" = "DAD"
+                 , "First_Penalty_Date" = "FPD"
+                 , "First_Withdrawal_Date" = "FWD"
+                 , "Last_Date_PF" = "LDPF"
+                 , "MOB_Since_Activation" = "MSA"
+                 , "MOB_Before_First_Penalty" = "MBFP"
+                 )) %>%
+  # select only needed variables
+  select(CID, OSK, DI, DA, CA,DAC,DR,DRF,DC,AD,DAD,FPD,FWD,LDPF,MSA,MBFP, FFRS, FFR, CCL, PN, FS, BN,BT)
+
+# Save encrypted data
+write_xlsx(Data_Encrypted,"./Output Data/010_Data_Encrypted.xlsx")
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
