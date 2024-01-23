@@ -1,7 +1,10 @@
 # WITH PARAMETRIZATION
 
-library(odbc)
-library(tidyverse)
+suppressMessages({
+   library(odbc)
+   library(tidyverse)
+})
+
 
 # SET A TIME PERIOD
 
@@ -53,8 +56,10 @@ data_sql
 
 # SQL Queries Loading
   
-  library(odbc)
-  library(tidyverse)
+suppressMessages({
+   library(odbc)
+   library(tidyverse)
+})
   
 # Contract Date Loading
   myc <- DBI::dbConnect(odbc::odbc(),
