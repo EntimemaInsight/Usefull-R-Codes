@@ -1,0 +1,115 @@
+data <- input_data_IDEA_Banking %>%
+  mutate(#average_PD = substr(average_PD, 1, nchar(average_PD) - 1),
+    start_date = dmy(start_date),
+    maturity_date = dmy(maturity_date),
+    reporting_date = as.Date("2019-12-31"),
+    loss_allowance = as.numeric(gsub("[[:space:]]", '', loss_allowance)),
+    #overdue_amount = as.numeric(gsub('[[:space:]]', '', overdue_amount)),
+    total_onbalance_exposure = as.numeric(gsub('[:space:]]', '', total_onbalance_exposure)),
+    total_offbalance_exposure = as.numeric(gsub('[[:space:]]', '', total_offbalance_exposure)),
+    credit_conversion_factor = as.numeric(gsub('[[:space:]]', '', credit_conversion_factor)),
+    lgd = as.numeric(sub("%", "",(gsub('[[:space:]]', '', lgd)))) / 100,
+    eir = as.numeric(gsub('[[:space:]]', '', eir)) / 100,
+    Revolving = ifelse(receivable_identifier %in% Exposures_with_repayment_schedules, 0, 1),
+    PoolForJoin = case_when(
+      assigned_pool_code %in% c("CLP", "IMOIND", "LEGIND", "SMEU") ~ "CLP1",
+      assigned_pool_code %in% c("LEGIND2") ~ "CLP2",
+      assigned_pool_code %in% c("LEAS", "LEGORG", "SMES") ~ "LEAS",
+      TRUE ~ "Error")
+  )
+
+unique(data$assigned_pool_code)
+table(data$PoolForJoin)
+
+
+
+Stage3Provisions <- data %>%
+  filter(provisioning_stage_code == "S3",
+         impairment_type_code == "G") %>%
+  mutate(EAD = total_onbalance_exposure,
+         Provision = round(1 * lgd * EAD, 2),
+         Diff = abs(loss_allowance - Provision),
+         x = loss_allowance,
+         lgd1 = lgd,
+         EIR1 = eir) %>%
+  filter(Diff > 10) %>%
+  arrange(desc(Diff))
+  
+
+
+xxx <- data %>%
+  filter(Revolving == 1,
+         impairment_type_code == "G")
+
+data.revolving <- data %>%
+  filter(Revolving == 1,
+         impairment_type_code == "G") %>%
+  mutate(to_multiply = elapsed_months(maturity_date, start_date))
+
+
+%>%
+  mutate(MonthPD = elapsed_months(V2, start_date)) %>%
+  group_by(receivable_identifier)%>%
+  mutate(toSubstract = cumsum(V3),
+         lag.toSubstract = lag(toSubstract),
+         lag.toSubstract = ifelse(row_number() == 1, 0, lag.toSubstract),
+         EAD = total_onbalance_exposure - lag.toSubstract) %>%
+  ungroup() %>%
+  left_join(PD.Curves, by = c("MonthPD" = "Month", "PoolForJoin" = "Pool")) %>%
+  mutate(
+    MarginalPD = case_when(
+      credit_risk_rating_code == "R1" ~ R1,
+      credit_risk_rating_code == "R2" ~ R2,
+      credit_risk_rating_code == "R3" ~ R3,
+      credit_risk_rating_code == "R4" ~ R4,
+      credit_risk_rating_code == "R5" ~ R5,
+      credit_risk_rating_code == "R6" ~ R6,
+      TRUE ~ 999999999999),
+    #Date.For.Koef.Calc = as.Date(as.numeric(ceiling_date(V2, "month")) - 1, origin = "1970-01-01"),
+    Date.For.Koef.Calc = floor_date(V2, "month") - 1,
+    Days.Koef.EIR = Date.For.Koef.Calc - reporting_date,
+    Koef.EIR = as.numeric(Days.Koef.EIR / 365),
+    Provision = round(MarginalPD * lgd * EAD / ((1 + eir) ^ Koef.EIR), 2))
+
+table(data$Revolving)
+length(unique(data.with.payments$receivable_identifier))
+
+
+
+
+data.with.payments <- left_join(data, Payments, by = c("receivable_identifier" = "V1")) %>%
+  filter(Revolving == 0,
+         impairment_type_code == "G",
+         provisioning_stage_code == "S2") %>%
+  mutate(MonthPD = elapsed_months(V2, start_date)) %>%
+  group_by(receivable_identifier)%>%
+  mutate(toSubstract = cumsum(V3),
+         lag.toSubstract = lag(toSubstract),
+         lag.toSubstract = ifelse(row_number() == 1, 0, lag.toSubstract),
+         EAD = total_onbalance_exposure - lag.toSubstract) %>%
+  ungroup() %>%
+  left_join(PD.Curves, by = c("MonthPD" = "Month", "PoolForJoin" = "Pool")) %>%
+  mutate(
+    MarginalPD = case_when(
+      credit_risk_rating_code == "R1" ~ R1,
+      credit_risk_rating_code == "R2" ~ R2,
+      credit_risk_rating_code == "R3" ~ R3,
+      credit_risk_rating_code == "R4" ~ R4,
+      credit_risk_rating_code == "R5" ~ R5,
+      credit_risk_rating_code == "R6" ~ R6,
+      TRUE ~ 999999999999),
+    #Date.For.Koef.Calc = as.Date(as.numeric(ceiling_date(V2, "month")) - 1, origin = "1970-01-01"),
+    Date.For.Koef.Calc = floor_date(V2, "month") - 1,
+    Days.Koef.EIR = Date.For.Koef.Calc - reporting_date,
+    Koef.EIR = as.numeric(Days.Koef.EIR / 365),
+    Provision = round(MarginalPD * lgd * EAD / ((1 + eir) ^ Koef.EIR), 2))
+
+Provisions <- data.with.payments %>%
+  group_by(receivable_identifier) %>%
+  summarise(Provision_actual = max(loss_allowance),
+            Provision_calcualted = sum(Provision)) %>%
+  ungroup() %>%
+  mutate(Diff = abs(Provision_actual - Provision_calcualted))
+
+ttt <- Provisions %>%
+  filter(Diff > 100)
