@@ -1,0 +1,589 @@
+  ---
+title: "White Card Bulgaria - Collection Scoring New Clients"
+author: "Aleksandar Dimitrov"
+date: '20-04-2023'
+output: 
+  html_document:
+    toc: true
+    toc_depth: 2
+    number_sections: true
+    toc_float: true
+    theme: flatly
+---
+
+
+
+```{r setup, include=FALSE, warning=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+
+library(tidyverse)
+library(lubridate)
+library(xgboost)
+library(writexl)
+library(caret)
+library(funModeling)
+library(kableExtra)
+library(DT)
+library(plotly)
+library(formattable)
+library(readr)
+library(readxl)
+
+set.seed(12)
+
+options(scipen = 999)
+
+# Load UDF for AUC and Gini calculation and for Train/Test Split
+source("./Functions/F_AUC_Gini_Coeff.R")
+source("./Functions/F_Train_Test_Validation_Split.R")
+
+```
+
+# Project Aim
+
+The aim of this project is to create and present a Proof of Concept collection model in terms of predictive power and propose ways how it can be implemented in the collection strategy of Access Finance for White Card Product to improve collection performance and increase revenue and profit. 
+
+
+```{r Load Wrangle Data, include=FALSE}
+
+# Load Scoring Data
+Scoring_Data = readRDS("//hind.smartitbg.int/FileServer/Data Analyses/Analysis/1.Projects/110.WCard BG/10. Data/09 Automate Scoring Info Extraction from Provenir xmls/Final Results and Documentation/030_WC_BG_Full_Scoring_data.rds")
+ 
+# # Load data
+# myc <- DBI::dbConnect(odbc::odbc()
+#                       , driver = "SQL Server"
+#                       , server = "Scorpio.smartitbg.int"
+#                       , database = "BIsmartWCPL"
+# )
+# 
+# Query <- read_file('./SQL Queries/Collection_Model_Dataset_Query.sql')
+# 
+# start_time <- Sys.time()
+# Sample_Collection_Scoring <- DBI::dbFetch(DBI::dbSendQuery(myc, Query))
+# print(paste("Done in", round(difftime(Sys.time(), start_time,unit = "mins"),2), "minutes"))
+# 
+# #Close the database connection
+# DBI::dbDisconnect(myc)
+# 
+# # Save the raw sample data
+# saveRDS(Sample_Collection_Scoring,"./Output Data/010_Sample_Collection_Scoring.rds")
+
+Sample_Collection_Scoring = readRDS("./Output Data/010_Sample_Collection_Scoring.rds")
+
+Sample_Collection_Scoring = Sample_Collection_Scoring %>%
+  select(-`101-Cash Withdrawal`,-`2520-Такса управление на платежен инструмент`,-`500-LRIR (Interest 1)`,-`502-RIR (Interest 2)`
+         , -`600-PI (Penalty Interest)`, -`800-DILP`, -`90-Discount`, -`99-Amount received`
+         , -`599-PI (Penalty Interest)`,-`601-Collection fee`,-`602-PI2 (Penalty Interest 2)`
+         , - MonthlyPaid
+         #, -NextObsPoint
+         , -NextObsPointMonth, - Paid_MAD, -MonthlyPaid, -MinDate
+         , - Days_Observed_In_Month, -MPV_Begging_Of_Month, -CumulativePayment, -DayOfMonth
+         )
+
+# Wrangle the data - fill NAs
+Sample_Collection_Scoring_Wrangled = Sample_Collection_Scoring %>%
+  mutate(Days_Since_Last_Repayment = ifelse(is.na(Days_Since_Last_Repayment),999,Days_Since_Last_Repayment)
+         , CumulativeRepaymentLifetime = ifelse(is.na(CumulativeRepaymentLifetime),0,CumulativeRepaymentLifetime)
+         , CumulativeDILPLifetime = ifelse(is.na(CumulativeDILPLifetime),0,CumulativeDILPLifetime)
+         , CumulativeTax2520Lifetime = ifelse(is.na(CumulativeTax2520Lifetime),0,CumulativeTax2520Lifetime)
+         , CumulativeInterest500Lifetime = ifelse(is.na(CumulativeInterest500Lifetime),0,CumulativeInterest500Lifetime)
+         , CumulativeInterest502Lifetime = ifelse(is.na(CumulativeInterest502Lifetime),0,CumulativeInterest502Lifetime)
+         , CumulativeInterest600Lifetime = ifelse(is.na(CumulativeInterest600Lifetime),0,CumulativeInterest600Lifetime)
+         , CumulativeDiscountsLifetime = ifelse(is.na(CumulativeDiscountsLifetime),0,CumulativeDiscountsLifetime)
+         , CumulativeInterest602Lifetime = ifelse(is.na(CumulativeInterest602Lifetime),0,CumulativeInterest602Lifetime)
+         , CumulativeInterest599Lifetime = ifelse(is.na(CumulativeInterest599Lifetime),0,CumulativeInterest599Lifetime)
+         , CumulativeInterest601Lifetime = ifelse(is.na(CumulativeInterest601Lifetime),0,CumulativeInterest601Lifetime)
+         ) %>%
+  arrange(OfferSK, Days_On_Book) %>%
+  group_by(OfferSK)%>%
+  mutate(Lag_Paid_Flag = lag(Paid_MAD_Monthly)) %>%
+  ungroup() %>%
+  mutate(Lag_Paid_Flag = ifelse(is.na(Lag_Paid_Flag),0,Lag_Paid_Flag)) %>%
+  arrange(OfferSK, Days_On_Book) %>%
+  group_by(OfferSK)%>%
+  mutate(N_Paid_MAD = cumsum(Lag_Paid_Flag)) %>%
+  ungroup() %>%
+  select(-Lag_Paid_Flag) %>%
+  left_join(Scoring_Data %>% mutate(applicationNumber = as.numeric(applicationNumber)
+                                    , Score2Legacy_scoreResultPd = as.numeric(Score2Legacy_scoreResultPd)
+                                    , Score4R_scoreResultPd  = as.numeric(Score4R_scoreResultPd )
+                                    ) %>% select(applicationNumber, Score3R_scoreResultPd_Fixed, Score2Legacy_scoreResultPd, Score4R_scoreResultPd), by = c("OfferID" = "applicationNumber")) %>%
+  filter(DayDelay == 0 & Status == "Active")
+
+
+```
+
+# Data Collected
+
+A data sample was created corresponding to the following criteria:
+
+* Only clients with up to 6 months of history after activation are included in the sample. The rationale for this is that clients with more than 6 months of history are well known, know how to use the product and if they are good the probability that they would stop repaying is small. 
+
+* The label if the client repays or not is based on Minimum Due Sum repayment in the course of the month. If a client with due sum on 1st day of the month repays it until the end of the month he is labeled as paid. If not - he is labeled as not paid.
+
+* Only clients with MAD sums > 40 BGN as of 1st day of the month are included in the sample.
+
+* Only months with at least 28 collection days passed are included in the sample.
+
+* The sample is based on clients with cards activated in the period `r min(Sample_Collection_Scoring_Wrangled$FirstActivationDate, na.rm = T)` - `r max(Sample_Collection_Scoring_Wrangled$FirstActivationDate, na.rm = T) `.
+
+* The sample consists of **`r nrow(Sample_Collection_Scoring_Wrangled)`** observations coming from **`r n_distinct(Sample_Collection_Scoring_Wrangled$OfferSK)`** unique clients.
+
+```{r Initial Data Exploration Code, include = F}
+
+df_status = df_status(Sample_Collection_Scoring_Wrangled)
+
+```
+
+# Sample Variables
+
+The sample consists of the following variables: 
+
+* **Paid_MAD_Monthly** - the target column that we predict. We predict if the client would repay his MAD during the month.
+
+* **OfferSK** - Client identifier dwh
+
+* **OfferID** - Client systems identifier 
+
+* **FirstActivationDate** - Date of Card Activation
+
+* **Days_On_Book** - Days passed after card activation
+
+* **CurrentMPV** - Minimum Due Payment at the beginning of the month
+
+* **TotalDue** - Total Due at the beginning of the month
+
+* **DayDelay** - Days Delay at the beginning of the month
+
+* **Lastpayoffdate** - Date of last payment as of the beginning of the month
+
+* **Lastpayoffsum** - last paid sum as of the beginning of the month
+
+* **Lastwithdrawndate** - Date of last withdrawal as of the beginning of the month
+
+* **LastwithdrawnAmount** - last withdrawn amount as of the beginning of the month
+
+* **Status** - Current Card Status as of the beginning of the month - Active, Blocked, Expired etc.
+
+* **CumulativeRepaymentLifetime** - Total client sums paid as of the beginning of the month
+
+* **CumulativeWithdrawalLifetime** - Total client sums paid as of the beginning of the month
+
+* **CumulativeInterest500Lifetime** - Total client interest 500 as of the beginning of the month
+
+* **CumulativeDILPLifetime** - Total client DILP Interest as of the beginning of the month
+
+* **CumulativeTax2520ifetime** - Total client tax 2520 as of the beginning of the month
+
+* **CumulativeInterest502ifetime** - Total client Interest 502 as of the beginning of the month
+
+* **CumulativeInterest600ifetime** - Total client Interest 600 as of the beginning of the month
+
+* **CumulativeDiscountsLifetime** - Total client discounts as of the beginning of the month
+
+* **Days_Since_Last_Withdrawal** - Days Since Last Withdrawal
+
+* **Days_Since_Last_Repayment** - Days Since Last Repayment
+
+* **CurrentLimit** - The current limit of the client
+
+
+# Sample variables main statistics
+
+```{r Initial Data Exploration Visuals, include=TRUE}
+
+DT::datatable(df_status)
+
+```
+
+
+```{r Distribution of the target}
+
+Paid_Flag = data.frame(Flag = c("Paid","Not Paid")
+                       , Observations = c(sum(Sample_Collection_Scoring_Wrangled$Paid_MAD_Monthly), nrow(Sample_Collection_Scoring_Wrangled)-sum(Sample_Collection_Scoring_Wrangled$Paid_MAD_Monthly))
+                       , Proportion = c(sum(Sample_Collection_Scoring_Wrangled$Paid_MAD_Monthly)/nrow(Sample_Collection_Scoring_Wrangled)*100
+                                        , (1-sum(Sample_Collection_Scoring_Wrangled$Paid_MAD_Monthly)/nrow(Sample_Collection_Scoring_Wrangled))*100
+                                        )
+                       )
+
+```
+
+# Distribution of the predicted variable
+
+```{r Distribution of the target for report, include=TRUE}
+
+#DT::datatable(Paid_Flag)
+
+Paid_Flag %>%
+  mutate(Proportion = round(Proportion,1)) %>%
+  plot_ly(x = ~Flag, y = ~ Proportion, marker = list(color = "#2C3E50")) %>%
+  add_bars() %>%
+  layout(barmode = 'stack', title = "Distribution of Paid vs. Not Paid")
+
+```
+
+
+```{r Divide in Train Test Split}
+
+# Divide in Train, Test, Validation 
+
+Train_Test_Val_Split = Train_Test_Validation_Split(Sample_Collection_Scoring_Wrangled,0.6,0.5,1)
+
+Samples_Statistics_DF = data.frame(Sample = c("Train","Test","Validation")
+                                   , `Number_of_Observations` = c(nrow(Train_Test_Val_Split$TrainSet),nrow(Train_Test_Val_Split$TestSet),nrow(Train_Test_Val_Split$ValidationSet))
+                                   , `Percentage_Paid` = c(round(sum(Train_Test_Val_Split$TrainSet$Paid_MAD_Monthly)/nrow(Train_Test_Val_Split$TrainSet),3)*100
+                                                      ,round(sum(Train_Test_Val_Split$TestSet$Paid_MAD_Monthly)/nrow(Train_Test_Val_Split$TestSet),3)*100
+                                                      ,round(sum(Train_Test_Val_Split$ValidationSet$Paid_MAD_Monthly)/nrow(Train_Test_Val_Split$ValidationSet),3)*100)
+)
+
+TrainSetForBoxPlots = Train_Test_Val_Split$TrainSet %>%
+  mutate(Paid_MAD_Flag = ifelse(Paid_MAD_Monthly == 1,"Yes","No"))
+
+#saveRDS(Train_Test_Val_Split$FullSample,"./Output Data/010_Full_Sample_With_Features_Split.rds")
+
+
+```
+
+# Main statistics of Train, Test, Validation Sample
+
+```{r Train Test Table}
+
+DT::datatable(Samples_Statistics_DF)
+
+
+```
+
+
+# Box plots to visualize relationship between the target and most important predictors {.tabset}
+
+## Repayment
+
+```{r Repayment, warning=FALSE}
+
+TrainSetForBoxPlots %>%
+  plot_ly(x = ~CumulativeRepaymentLifetime, y = ~ Paid_MAD_Flag, type = "box",  orientation = "h") %>%
+  layout(title = "Cumulative Repayment vs. Paid MAD Box Plot")
+
+```
+
+## Days Since Last Payment
+
+```{r Days Since Last Payment, warning=FALSE}
+
+TrainSetForBoxPlots %>%
+  plot_ly(x = ~Days_Since_Last_Repayment, y = ~ Paid_MAD_Flag, type = "box",  orientation = "h") %>%
+  layout(title = "Days Since Last Payment vs. Paid MAD Box Plot (Missing coded as 999 Days)")
+
+```
+
+## Total Due
+
+```{r TotalDue, warning=FALSE}
+
+TrainSetForBoxPlots %>%
+  plot_ly(x = ~TotalDue, y = ~ Paid_MAD_Flag, type = "box",  orientation = "h") %>%
+  layout(title = "Total Due vs. Paid MAD Box Plot")
+
+```
+
+## Days Since Last Withdrawal
+
+```{r Days Since Last Withdrawal, warning=FALSE}
+
+TrainSetForBoxPlots %>%
+  plot_ly(x = ~Days_Since_Last_Withdrawals, y = ~ Paid_MAD_Flag, type = "box",  orientation = "h") %>%
+  layout(title = "Days Since Last Wihtdrawal vs. Paid MAD Box Plot")
+
+```
+
+# {-}
+
+```{r Test xgboost model, warning=FALSE, echo = FALSE, message=FALSE,results = FALSE}
+
+### Test xgboost model as a Proof of Concept
+
+# Train Set 
+Train_Set_For_Model = Train_Test_Val_Split$TrainSet %>%
+  select(Paid_MAD_Monthly, CurrentMPV, TotalDue
+         #, DayDelay
+         #, Status
+         , CumulativeRepaymentLifetime, CumulativeWithdrawalLifetime
+         , CumulativeInterest500Lifetime
+         #, CumulativeDILPLifetime
+         #, CumulativeTax2520Lifetime
+         #, CumulativeInterest502Lifetime
+         , CumulativeInterest600Lifetime
+         #, CumulativeDiscountsLifetime
+         , CumulativeInterest602Lifetime
+         , CumulativeInterest601Lifetime
+         , CumulativeInterest599Lifetime
+         , Days_Since_Last_Withdrawals, Days_Since_Last_Repayment
+         , Days_On_Book
+         #, PD
+         #, N_Paid_MAD
+         , CurrentLimit
+         #, Score3R_scoreResultPd_Fixed, Score2Legacy_scoreResultPd, Score4R_scoreResultPd
+         ) 
+
+#scaler_object = preProcess(Train_Set_For_Model %>% select(-Paid_MAD_Monthly), method = c("center","scale","nzv"))
+
+#Numeric_Features_Scaled = predict(scaler_object , Train_Set_For_Model %>% select(-Paid_MAD_Monthly)) 
+
+# Numeric_Features_Scaled_Train_Set = Numeric_Features_Scaled %>%
+#   cbind(Train_Set_For_Model %>% select(Paid_MAD_Monthly)) %>%
+#   select(Paid_MAD_Monthly,everything())
+
+# Convert to xgboost matrices
+Train_Set_xgb_matrix <- xgb.DMatrix(data = as.matrix(Train_Set_For_Model)[,-c(1)],
+                                    label = Train_Set_For_Model$Paid_MAD_Monthly)
+
+
+# Test Set 
+Test_Set_For_Model = Train_Test_Val_Split$TestSet %>%
+  select(Paid_MAD_Monthly, CurrentMPV, TotalDue
+         #, DayDelay
+         #, Status
+         , CumulativeRepaymentLifetime, CumulativeWithdrawalLifetime
+         , CumulativeInterest500Lifetime
+         #, CumulativeDILPLifetime
+         #, CumulativeTax2520Lifetime
+         #, CumulativeInterest502Lifetime
+         , CumulativeInterest600Lifetime
+         #, CumulativeDiscountsLifetime
+         , CumulativeInterest602Lifetime
+         , CumulativeInterest601Lifetime
+         , CumulativeInterest599Lifetime
+         , Days_Since_Last_Withdrawals, Days_Since_Last_Repayment
+         , Days_On_Book
+         #, PD
+         #, N_Paid_MAD
+         , CurrentLimit
+         #, Score3R_scoreResultPd_Fixed, Score2Legacy_scoreResultPd, Score4R_scoreResultPd
+         ) 
+
+#scaler_object = preProcess(Test_Set_For_Model %>% select(-Paid_MAD_Monthly), method = c("center","scale","nzv"))
+# 
+# Numeric_Features_Scaled = predict(scaler_object , Test_Set_For_Model %>% select(-Paid_MAD_Monthly)) 
+# 
+# Numeric_Features_Scaled_Test_Set = Numeric_Features_Scaled %>%
+#   cbind(Test_Set_For_Model %>% select(Paid_MAD_Monthly)) %>%
+#   select(Paid_MAD_Monthly,everything())
+
+# Validation Set 
+Validation_Set_For_Model = Train_Test_Val_Split$ValidationSet %>%
+  select(Paid_MAD_Monthly, CurrentMPV, TotalDue
+         #, DayDelay
+         #, Status
+         , CumulativeRepaymentLifetime, CumulativeWithdrawalLifetime
+         , CumulativeInterest500Lifetime
+         #, CumulativeDILPLifetime
+         #, CumulativeTax2520Lifetime
+         #, CumulativeInterest502Lifetime
+         , CumulativeInterest600Lifetime
+         #, CumulativeDiscountsLifetime
+         , CumulativeInterest602Lifetime
+         , CumulativeInterest601Lifetime
+         , CumulativeInterest599Lifetime
+         , Days_Since_Last_Withdrawals, Days_Since_Last_Repayment
+         , Days_On_Book
+         #, PD
+         #, N_Paid_MAD
+         , CurrentLimit
+         #, Score3R_scoreResultPd_Fixed, Score2Legacy_scoreResultPd, Score4R_scoreResultPd
+  ) 
+
+# Full_Sample
+Full_Set_For_Model = Train_Test_Val_Split$FullSample %>%
+  select(Paid_MAD_Monthly, CurrentMPV, TotalDue
+         #, DayDelay
+         #, Status
+         , CumulativeRepaymentLifetime, CumulativeWithdrawalLifetime
+         , CumulativeInterest500Lifetime
+         #, CumulativeDILPLifetime
+         #, CumulativeTax2520Lifetime
+         #, CumulativeInterest502Lifetime
+         , CumulativeInterest600Lifetime
+         #, CumulativeDiscountsLifetime
+         , CumulativeInterest602Lifetime
+         , CumulativeInterest601Lifetime
+         , CumulativeInterest599Lifetime
+         , Days_Since_Last_Withdrawals, Days_Since_Last_Repayment
+         , Days_On_Book
+         #, PD
+         #, N_Paid_MAD
+         , CurrentLimit
+         #, Score3R_scoreResultPd_Fixed, Score2Legacy_scoreResultPd, Score4R_scoreResultPd
+         , NextObsPoint
+  ) 
+
+
+#scaler_object = preProcess(Validation_Set_For_Model %>% select(-Paid_MAD_Monthly), method = c("center","scale","nzv"))
+
+#Numeric_Features_Scaled = predict(scaler_object , Validation_Set_For_Model %>% select(-Paid_MAD_Monthly)) 
+
+#Numeric_Features_Scaled_Validation_Set = Numeric_Features_Scaled %>%
+#  cbind(Validation_Set_For_Model %>% select(Paid_MAD_Monthly)) %>%
+#  select(Paid_MAD_Monthly,everything())
+
+
+# Convert to xgboost matrices
+Test_Set_xgb_matrix <- xgb.DMatrix(data = as.matrix(Test_Set_For_Model)[,-c(1)],
+                                    label = Test_Set_For_Model$Paid_MAD_Monthly)
+
+
+# Train the model
+params_list <- list(eta = 0.12,
+                    nthread = 8,
+                    alpha = 10,
+                    lambda = 1,
+                    gamma = 3,
+                    max_depth = 8,
+                    min_child_weight = 2,
+                    subsample = 0.8,
+                    colsample_bytree = 1,
+                    objective = "binary:logistic",
+                    verbose = 1,
+                    eval_metric = 'auc')
+
+# verbose = 1, print evaluation metric
+set.seed(1)
+xgb_model <- xgb.train(data = Train_Set_xgb_matrix,
+                       params = params_list,
+                       watchlist = list(train = Train_Set_xgb_matrix, test = Test_Set_xgb_matrix),
+                       nrounds = 800,
+                       early_stopping_rounds = 100) 
+
+saveRDS(xgb_model,"./Output Data/Access_Finance_xgboost_collection_model.rds")
+### AUC on test set 0.875
+
+# Examine Variable Importance
+importance_matrix <- xgb.importance(model = xgb_model)
+#print(importance_matrix)
+
+#write_xlsx(importance_matrix,"./Output Data/010_xgb_importance_matrix.xlsx")
+
+importance_matrix_top = importance_matrix[1:25,] %>%
+  filter(!is.na(Feature))
+
+#xgb.ggplot.importance(importance_matrix = importance_matrix_top, left_margin = 15, n_clusters = 1) +
+#  ggtitle("Top Features Importance") +
+#  theme(legend.position = "none")
+
+# Performance on tain, test and Validation Set 
+
+# Predicting test and validation sets - xgboost
+pred_train_set <- predict(xgb_model, as.matrix(Train_Set_For_Model)[,-c(1)])
+pred_test_set <- predict(xgb_model, as.matrix(Test_Set_For_Model)[,-c(1)])
+pred_validation_set <- predict(xgb_model, as.matrix(Validation_Set_For_Model)[,-c(1)])
+
+# Calculate AUC and Gini values
+AUC_Gini_Train = F_AUC_Gini(pred_train_set,Train_Test_Val_Split$TrainSet$Paid_MAD_Monthly)
+AUC_Gini_Test = F_AUC_Gini(pred_test_set,Train_Test_Val_Split$TestSet$Paid_MAD_Monthly)
+AUC_Gini_Validation = F_AUC_Gini(pred_validation_set,Train_Test_Val_Split$ValidationSet$Paid_MAD_Monthly)
+
+# Save the final results in a data frame
+XGBoost_Model_Gini = data.frame(Model = c("XGBoost Manual Tuning","XGBoost Manual Tuning","XGBoost Manual Tuning")
+                                , Sample = c("Train","Test","Validation")
+                                , AUC = c(round(AUC_Gini_Train$auc_value, digits = 2)
+                                          ,round(AUC_Gini_Test$auc_value, digits = 2)
+                                          , round(AUC_Gini_Validation$auc_value, digits = 2)
+                                          )
+                                , Gini = c(round(AUC_Gini_Train$gini_value, digits = 2)*100
+                                           , round(AUC_Gini_Test$gini_value, digits = 2)*100
+                                           , round(AUC_Gini_Validation$gini_value, digits = 2)*100
+                                           )
+)
+
+#View(XGBoost_Model_Gini)
+# Export the final results for the model performance in excel 
+#write_xlsx(XGBoost_Model_Gini,"./Output Data/010_XGBoost_Model_Gini_Manual_Tuning.xlsx")
+
+### Compare Predictions to Outcomes Validation Set ### 
+Validation_Set_Predicted_Vs_Real = Validation_Set_For_Model %>%
+  mutate(Prob_Repayment = pred_validation_set
+         , Prob_Repayment_Reverse = 1 - Prob_Repayment
+         ) %>%
+  mutate(Prob_Repayment_Class = case_when(Prob_Repayment_Reverse <= 0.05 ~ 1
+                                            , Prob_Repayment_Reverse <= 0.1 ~ 2
+                                            , Prob_Repayment_Reverse <= 0.15 ~ 3
+                                            , Prob_Repayment_Reverse <= 0.2 ~ 4
+                                            , Prob_Repayment_Reverse <= 0.3 ~ 5
+                                            , Prob_Repayment_Reverse <= 0.4 ~ 6
+                                            , Prob_Repayment_Reverse <= 0.5 ~ 7
+                                            , Prob_Repayment_Reverse <= 0.6 ~ 8
+                                            , Prob_Repayment_Reverse <= 0.65 ~ 9
+                                            , Prob_Repayment_Reverse > 0.65 ~ 10
+         )
+         ) %>%
+  group_by(Prob_Repayment_Class) %>%
+  summarise(N_Cases = n()
+            , Repaid = sum(Paid_MAD_Monthly)
+            ) %>%
+  ungroup() %>%
+  mutate(Repaid_Percent = round(Repaid/N_Cases,digits = 3)*100)
+
+#write_xlsx(Validation_Set_Predicted_Vs_Real,"./Output Data/010_Validation_Set_Predicted_Vs_Real.xlsx")
+
+
+```
+
+# XGBoost Model Results {.tabset}
+
+## Feature Importance
+
+```{r Visualize Model Results feature importance, warning=FALSE}
+
+importance_matrix_top %>%
+  mutate(Gain = round(Gain,3)) %>%
+  plot_ly(x = ~Gain, y = ~ Feature, type = "bar",  orientation = "h", marker = list(color = "#2C3E50")) %>%
+  layout(title = "Feature Importance Xgboost Model"
+         , yaxis = list(categoryorder = "total ascending", title = F)
+         )
+
+```
+
+## Gini Coefficient
+
+```{r Visualize Model Results Gini , warning=FALSE}
+
+DT::datatable(XGBoost_Model_Gini)
+
+
+```
+
+
+## Precision by Class
+
+```{r Visualize Model Results Precision by Class , warning=FALSE}
+
+DT::datatable(Validation_Set_Predicted_Vs_Real)
+
+
+```
+
+
+## Precision Graph
+
+```{r Visualize Model Results Precision by Class Graph , warning=FALSE}
+
+Validation_Set_Predicted_Vs_Real %>%
+  plot_ly(x = ~Prob_Repayment_Class, y = ~ Repaid_Percent, marker = list(color = "#2C3E50")) %>%
+  add_bars() %>%
+  layout(title = "Percentage of clients repaid by Class"
+         , yaxis = list(title = F)
+         )
+
+```
+
+# {-}
+
+
+
+
+
+
+
+
+
+
+
