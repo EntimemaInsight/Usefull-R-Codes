@@ -1,0 +1,12 @@
+  suppressMessages({
+    library(tidyverse)
+  })
+
+
+  input <- "C:/Users/aleksandar.dimitrov/Desktop/INFOLITICA/IFRS 9 ПОДГОТОВКА/hdi-cpi.csv"
+  
+  data <- read.csv(input) %>%
+    as.tibble()
+  
+  
+  data
