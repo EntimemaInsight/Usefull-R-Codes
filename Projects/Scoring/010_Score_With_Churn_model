@@ -1,0 +1,314 @@
+# Load libraries
+library(DBI)
+library(odbc)
+library(tidyverse)
+library(funModeling)
+library(lubridate)
+
+##### Import user-defined functions
+# source("./Functions/ReadHarold_WC_BG.R")
+# source("./Functions/elapsed_months.R")
+
+### Product ###
+myc <- DBI::dbConnect(odbc::odbc()
+                      , driver = "SQL Server"
+                      , server = "Scorpio.smartitbg.int"
+                      , database = "BIsmartWCBG"
+)
+
+Product_Query <- paste0("select O.OfferSK 
+                        , P.Name as Product
+                  from dwh.DimOffers O 
+                  left join dwh.DimProduct P on O.ProductSK = P.ProductSK")
+
+
+start_time <- Sys.time()
+Product <- DBI::dbFetch(DBI::dbSendQuery(myc, Product_Query))
+print(paste("Done in", round(difftime(Sys.time(), start_time,unit = "mins"),2), "minutes"))
+
+### Status ###
+myc <- DBI::dbConnect(odbc::odbc()
+                      , driver = "SQL Server"
+                      , server = "Scorpio.smartitbg.int"
+                      , database = "BIsmartWCBG"
+)
+
+Status_Query <- paste0("select OfferSK
+                               , Status
+                        from
+                        (
+                        select C.OfferSK
+                               , S.Name as Status
+                        	   , ROW_NUMBER() OVER(PARTITION BY OfferSK
+                               ORDER BY CDate DESC) AS rn
+                        	   , CDate
+                        	   , ActivationDate
+                        from dwh.DimCards C
+                        left join dwh.DimCardStatus S on C.StatusSK = S.StatusSK
+                        ) S
+                        where rn = 1")
+
+
+start_time <- Sys.time()
+Status <- DBI::dbFetch(DBI::dbSendQuery(myc, Status_Query))
+print(paste("Done in", round(difftime(Sys.time(), start_time,unit = "mins"),2), "minutes"))
+
+### Status ###
+myc <- DBI::dbConnect(odbc::odbc()
+                      , driver = "SQL Server"
+                      , server = "Scorpio.smartitbg.int"
+                      , database = "BIsmartWCBG"
+)
+
+Penalty_Query <- paste0("select OfferSK
+                                , 1 as Penalty_Flag
+                          from dwh.FactExtraExpenses
+                          where DocumentDate = dateadd(day,datediff(day,1,GETDATE()),0)
+                          and FinOperationSK = 6")
+
+
+start_time <- Sys.time()
+Penalty <- DBI::dbFetch(DBI::dbSendQuery(myc, Penalty_Query))
+print(paste("Done in", round(difftime(Sys.time(), start_time,unit = "mins"),2), "minutes"))
+
+
+#### Define the date
+Date <- as.character(floor_date(Sys.Date(), unit = "months"))
+
+# Load Data
+# Create and name a connection to the database
+myc <- DBI::dbConnect(odbc::odbc()
+                      , driver = "SQL Server"
+                      , server = "Scorpio.smartitbg.int"
+                      , database = "BIsmartWCBG"
+)
+
+WC_BG_Sample_For_Churn_Snapshots_Query <- read_file("SQL Queries\\WC_BG_Sample_For_Churn_Snapshots.sql")
+WC_BG_Sample_For_Churn_Snapshots_Query <- gsub("GETDATE\\(\\)", paste0("'",Date,"'"), WC_BG_Sample_For_Churn_Snapshots_Query)
+
+start_time <- Sys.time()
+WC_BG_Sample_For_Churn_Snapshots <- DBI::dbFetch(DBI::dbSendQuery(myc, WC_BG_Sample_For_Churn_Snapshots_Query))
+print(paste("Done in", round(difftime(Sys.time(), start_time,unit = "mins"),2), "minutes"))
+
+WC_BG_Harold_For_Churn_Full = readRDS("//hind.smartitbg.int/FileServer/Data Analyses/Analysis/1.Projects/113.WCard PL/3.Reporting/Regular/01 Risk Management Report/Output Data/011_WC_BG_Full_Harold_Only_Approved.rds")
+
+WC_BG_Harold_For_Churn_Full_Wrangled = WC_BG_Harold_For_Churn_Full %>%
+  plyr::rename(c("РљР»РёРµРЅС‚СЃРєРё.РЅРѕРјРµСЂ" = "EasyClientNumber"
+                 , "РЎС„РµСЂР°.РЅР°.РґРµР№РЅРѕСЃС‚" = "EmploymentArea"
+                 , "РќР°С‡РёРЅ.РЅР°.РїРѕР»СѓС‡Р°РІР°РЅРµ.РЅР°.Р·Р°РїР»Р°С‚Р°" = "GetSalaryType"
+                 , "РЎС‚Р°С‚СѓСЃ.Р¦РљР " = "CkrStatus"
+                 , "РћР±СЂР°Р·РѕРІР°РЅРёРµ" = "Education"
+                 #, "" = ""
+  )
+  ) %>%
+  select(EasyClientNumber, EmploymentArea, GetSalaryType, CkrStatus, Education)
+
+WC_BG_Sample_For_Churn_Snapshots_Full = WC_BG_Sample_For_Churn_Snapshots %>% mutate(EasyClientNumber = as.character(EasyClientNumber)) %>%
+  left_join(WC_BG_Harold_For_Churn_Full_Wrangled, by = "EasyClientNumber")
+
+WC_BG_Sample_For_Churn_Snapshots_Full_Scoring_Ready = WC_BG_Sample_For_Churn_Snapshots_Full %>%
+  mutate(EmploymentAreaGr = case_when(EmploymentArea %in% c("РџСЂРѕС„РµСЃРёРѕРЅР°Р»РЅРё СѓСЃР»СѓРіРё (Р°РґРІРѕРєР°С‚СЃРєРё, РєРѕРЅСЃСѓР»С‚Р°РЅС‚СЃРєРё,"
+                                                            , "РџСЂРѕС„РµСЃРёРѕРЅР°Р»РЅРё СѓСЃР»СѓРіРё (Р°РґРІРѕРєР°С‚СЃРєРё, РєРѕРЅСЃСѓР»С‚Р°РЅС‚СЃРєРё, "
+                                                            , "РўРµР¶РєР° РїСЂРѕРјРёС€Р»РµРЅРѕСЃС‚ Рё РјР°С€РёРЅРѕСЃС‚СЂРѕРµРЅРµ"
+                                                            , "РћР±С‰РµСЃС‚РІРµРЅ СЃРµРєС‚РѕСЂ (Р°РґРјРёРЅРёСЃС‚СЂР°С†РёСЏ, Р·РґСЂР°РІРµРѕРїР°Р·РІР°РЅРµ,"
+                                                            , "РћР±С‰РµСЃС‚РІРµРЅ СЃРµРєС‚РѕСЂ (Р°РґРјРёРЅРёСЃС‚СЂР°С†РёСЏ, Р·РґСЂР°РІРµРѕРїР°Р·РІР°РЅРµ, " 
+                                                            , "РљРѕРјСѓРЅР°Р»РЅРё СѓСЃР»СѓРіРё (РїСЂРѕРёР·РІРѕРґСЃС‚РІРѕ Рё РґРѕСЃС‚Р°РІРєР° РЅР° С‚РѕРє,"
+                                                            , "РџРѕР»РёС†РёСЏ Рё РІРѕРµРЅРЅРё"
+                                                            , "Sectorul public (administratie, sanatate, educatie, cultura, etc)."
+                                                            , "Utilitati (productia si furnizarea de energie electrica, apa, etc)."
+                                                            , "Heavy industry and engineering"
+                                                            , "Servicii profesionale (juridice, consultare, financiare etc,)."
+                                                            , "Public sector (administration, health, education, culture, etc.)."
+                                                            , "Politie si armata"
+                                                            , "Industria grea si inginerie"
+                                                            , "Professional services (attorneys, consultants, financial , IT and etc.)"
+                                                            , "Utilities (production and supply of electricity, water and other)"
+                                                            , "Police and military") ~ "Group1"
+                                      , EmploymentArea %in% c("Р›РµРєР° РїСЂРѕРјРёС€Р»РµРЅРѕСЃС‚ (С…СЂР°РЅРёС‚РµР»РЅРѕ-РІРєСѓСЃРѕРІР°,С‚РµРєСЃС‚РёР»РЅР° Рё"
+                                                              , "РћР±С‰Рё СѓСЃР»СѓРіРё (С„СЂРёР·СЊРѕСЂСЃС‚РІРѕ, РѕС…СЂР°РЅРёС‚РµР»РЅРё, СЂРµСЃС‚РѕСЂР°РЅС‚СЊ"
+                                                              , "РЎС‚СЂРѕРёС‚РµР»СЃС‚РІРѕ"
+                                                              , "РќРµРёР·РІРµСЃС‚РЅРѕ"
+                                                              , "РўСЉСЂРіРѕРІРёСЏ"
+                                                              , "РРЅС„РѕСЂРјР°С†РёРѕРЅРЅРё С‚РµС…РЅРѕР»РѕРіРёРё Рё С‚РµР»РµРєРѕРјСѓРЅРёРєР°С†РёРё"
+                                                              , "Р”РѕР±РёРІРЅР° РїСЂРѕРјРёС€Р»РµРЅРѕСЃС‚ (РґСЉСЂРІРѕРґРѕР±РёРІ, РІСЉРіР»РµРґРѕР±РёРІ Рё РґСЂ"
+                                                              , "Servicii generale (coafura, de securitate, catering, etc)."
+                                                              , "Comert"
+                                                              , "Constructii"
+                                                              , "Construction"
+                                                              , "Industria u?oara (alimentare, textile, etc)."
+                                                              , "Necunoscut"
+                                                              , "Tehnologia Informatiei si Telecomunicatiilor"
+                                                              , "Light Industry (textile, food and etc.)"
+                                                              , "Unknown"
+                                                              , "Extraction industries(logging, mining and others)"
+                                                              , "Trade"
+                                                              , "General Services (hairdressing, security, restaurant and etc.)"
+                                                              , "Industria extractiva (exploatare forestiera, minerit, etc)"
+                                                              , "Information Technology and Telecommunications") | is.na(EmploymentArea) ~ "Group 2+РўСЉСЂРіРѕРІРёСЏ"
+                                      , EmploymentArea %in% c("РќРµСЂР°Р±РѕС‚РµС‰ (РІРєР». Р·Р°РµС‚ РїРѕ СЃРѕС†. РїСЂРѕРіСЂР°РјРё)"
+                                                              , "РЎРµР»СЃРєРѕ СЃС‚РѕРїР°РЅСЃС‚РІРѕ"
+                                                              , "Neangajat (inclusiv ocupat pe programele sociale)"
+                                                              , "Agriculture"
+                                                              , "Unemployeed( including busy on social programs)") ~ "Group3"
+                                      , EmploymentArea %in% c("РўСЂР°РЅСЃРїРѕСЂС‚ (РІРєР». С‚Р°РєСЃРёРјРµС‚СЂРѕРІ)"
+                                                              , "Transport (inclusiv taxi)"
+                                                              , "Transportation (including taxi)") ~ "РўСЂР°РЅСЃРїРѕСЂС‚"
+                                      , TRUE ~ "Error")
+         , GetSalaryTypeGR = case_when(GetSalaryType %in% c("Р’ Р±СЂРѕР№", "Cash", "A adie") | is.na(GetSalaryType) ~ "Р’ Р±СЂРѕР№"
+                                       , GetSalaryType %in% c("РџРѕ СЃРјРµС‚РєР°","Bank","Di nelner") ~ "РџРѕ СЃРјРµС‚РєР°"
+                                       , TRUE ~ "Error")
+         , LastPmtFlagGR = case_when(LastPmtFlag <= 0 | is.na(LastPmtFlag) ~ "0 or missing"
+                                     , LastPmtFlag == 1 ~ "1"
+                                     , LastPmtFlag > 1 ~ "2+")
+         , LastWithdrFlagGR = case_when(LastWithdrFlag == 0 ~ "0"
+                                        , LastWithdrFlag > 0 ~ ">0")
+         , LastWthdwAmt_CurrLimitGR = case_when(LastWthdwAmt_CurrLimit <= 0.2 ~ "[0-0.2]"
+                                                , LastWthdwAmt_CurrLimit > 0.2 ~ "0.2+")
+         , TotalDue_CurrLimitGR = case_when(TotalDue_CurrLimit==997 | TotalDue_CurrLimit<=0 ~ "997 U [0-)"
+                                            , TotalDue_CurrLimit<=0.7 ~ "(0-0.7]U(0.9-1.15]"
+                                            , TotalDue_CurrLimit<=0.9 ~ "(0.7-0.9]"
+                                            , TotalDue_CurrLimit<=1.15 ~ "(0-0.7]U(0.9-1.15]"
+                                            , TotalDue_CurrLimit > 1.15 ~ "1.15+")
+         , CkrStatusGR = case_when(is.na(CkrStatus) | CkrStatus %in% c("РќРµРёР·РІРµСЃС‚РµРЅ СЃС‚Р°С‚СѓСЃ", "?????????? ??????", "1", "Status Unknown") ~ "No Information"
+                                   , CkrStatus %in% c("401 вЂ“ Р РµРґРѕРІРµРЅ РѕС‚ 0 РґРѕ 30 РґРЅРё СЃ РєРѕРґ 70"
+                                                      , "401 пїЅ ??????? ?? 0 ?? 30 ??? ? ??? 70"
+                                                      , "401"
+                                                      , "No Delays"
+                                                      , "СЃС‚Р°С‚СѓСЃ 401 - Р РµРґРѕРІРµРЅ"
+                                                      , "СЃС‚Р°С‚СѓСЃ 400 - РќСЏРјР° РєСЂРµРґРёС‚Рё"
+                                   ) ~ "Р РµРґРѕРІРµРЅ"
+                                   , CkrStatus %in% c("402 - РџРѕРґ РЅР°Р±Р»СЋРґРµРЅРёРµ РѕС‚ 31 РґРѕ 60 РґРЅРё СЃ РєРѕРґ 71"
+                                                      , "Over 30 days"
+                                                      , "402 - ??? ?????????? ?? 31 ?? 60 ??? ? ??? 71"
+                                                      , "402"
+                                                      , "СЃС‚Р°С‚СѓСЃ 402 - РџРѕРґ РЅР°Р±Р»СЋРґРµРЅРёРµ") ~ "РџРѕРґ РЅР°Р±Р»СЋРґРµРЅРёРµ"
+                                   , CkrStatus %in% c("404 - Р—Р°РіСѓР±Р° РѕС‚ 91 РґРѕ 180 РґРЅРё СЃ РєРѕРґ 73"
+                                                      , "403 - РќРµСЂРµРґРѕРІРµРЅ РѕС‚ 61 РґРѕ 90 РґРЅРё СЃ РєРѕРґ 72"
+                                                      , "404 - Р—Р°РіСѓР±Р° РѕС‚ 181 РґРѕ 360 РґРЅРё СЃ РєРѕРґ 74"
+                                                      , "СЃС‚Р°С‚СѓСЃ 404 - Р—Р°РіСѓР±Р°"
+                                                      , "СЃС‚Р°С‚СѓСЃ 403 - РќРµСЂРµРґРѕРІРµРЅ"
+                                                      , "СЃС‚Р°С‚СѓСЃ 404 - РќРµРѕР±СЃР»СѓР¶РІР°РЅ"
+                                                      , "404 - Р—Р°РіСѓР±Р° РЅР°Рґ 360 РґРЅРё СЃ РєРѕРґ 75"
+                                                      , "СЃС‚Р°С‚СѓСЃ 300 - РќСЏРјР° РґР°РЅРЅРё Р·Р° С‚РѕРІР° Р•Р“Рќ"
+                                                      , "3"
+                                                      , "403"
+                                                      , "404"
+                                                      , "Over 60 days"
+                                                      , "Over 120 days"
+                                                      , "Over 180 days"
+                                                      , "Sent for Collection (collectors company)"
+                                                      , "Over 90 days"
+                                                      , "Written-off") ~ "РќРµСЂРµРґРѕРІРµРЅ/Р—Р°РіСѓР±Р°/РќРµРѕР±СЃР»СѓР¶РІР°РЅ"
+         )
+         , EducationGR = case_when(Education %in% c("РќР°С‡Р°Р»РЅРѕ"
+                                                    , "РћСЃРЅРѕРІРЅРѕ"
+                                                    , "Р‘РµР· РѕР±СЂР°Р·РѕРІР°РЅРёРµ"
+                                                    , "Without education"
+                                                    , "Primary"
+                                                    , "Primar"
+         ) | is.na(Education) ~ "Р‘РµР· РѕР±СЂР°Р·РѕРІР°РЅРёРµ/РќР°С‡Р°Р»РЅРѕ/РћСЃРЅРѕРІРЅРѕ"
+         , Education %in% c("РџРѕР»СѓРІРёСЃС€Рµ / РЎРїРµС†РёР°Р»РёСЃС‚"
+                            , "РџРѕР»СѓРІРёСЃС€Рµ / РЎРїРµС†РёР°Р»РёСЃС‚ "
+                            , "РЎСЂРµРґРЅРѕ"
+                            , "Medie"
+                            , "Licen?a"
+                            , "Colegiu / Specialist"
+                            , "Principal"
+                            , "High School"
+                            , "College / Specialist"
+                            , "Secondary School") ~ "РџРѕР»СѓРІРёСЃС€Рµ/РЎРїРµС†РёР°Р»РёСЃС‚/РЎСЂРµРґРЅРѕ"
+         , Education %in% c("Р’РёСЃС€Рµ Р±Р°РєР°Р»Р°РІСЉСЂ"
+                            , "Р’РёСЃС€Рµ РґРѕРєС‚РѕСЂ Рё РґСЂ. Р°РєР°РґРµРјРёС‡РЅРё СЃС‚РµРїРµРЅРё"
+                            , "Р’РёСЃС€Рµ"
+                            , "Р’РёСЃС€Рµ РјР°РіРёСЃС‚СЉСЂ"
+                            , "Universitare de licenta"
+                            , "Masterat"
+                            , "University"
+                            , "University Bachelor"
+                            , "Higher Master"
+                            , "Higher Ph.D.  and other degree") ~ "Р’РёСЃС€Рµ")
+  ) %>%
+  filter(!is.na(Education)
+         & !is.na(LastPmtFlag)
+         & !is.na(LastWithdrFlag)
+         & !is.na(LastWthdwAmt_CurrLimit)
+  )
+
+proverka = df_status(WC_BG_Sample_For_Churn_Snapshots_Full_Scoring_Ready)
+
+CKR = WC_BG_Sample_For_Churn_Snapshots_Full_Scoring_Ready %>%
+  filter(is.na(CkrStatusGR))
+
+# Load Scoring Model
+WC_RO_Churn_Scoring_Model = readRDS("./Input Data/WC_BG_Churn_Model.rds")
+
+# Score sample on first snapshot date
+WC_RO_Sample_For_Churn_Snapshot_Scored = predict(WC_RO_Churn_Scoring_Model, newdata = WC_BG_Sample_For_Churn_Snapshots_Full_Scoring_Ready %>% 
+                                                          dplyr::select(EmploymentAreaGr, GetSalaryTypeGR, LastPmtFlagGR, LastWithdrFlagGR,
+                                                                        LastWthdwAmt_CurrLimitGR, TotalDue_CurrLimitGR, CkrStatusGR,
+                                                                        EducationGR), 
+                                                        type = 'response')
+
+
+
+# Add a column with predictions to the first sample
+WC_BG_Sample_For_Churn_Snapshot_Predicted = WC_BG_Sample_For_Churn_Snapshots_Full_Scoring_Ready %>%
+  left_join(Product, by = "OfferSK") %>%
+  left_join(Status, by = "OfferSK") %>%
+  left_join(Penalty, by = "OfferSK") %>%
+  mutate(Probability_Not_To_Churn = WC_RO_Sample_For_Churn_Snapshot_Scored
+         , Probability_To_Churn = 1 - Probability_Not_To_Churn
+         , Probability_To_Churn_Binned = case_when(Probability_To_Churn <= 0.05 ~ "1. <= 0.05"
+                                                   , Probability_To_Churn <= 0.1 ~ "2. <= 0.1"
+                                                   , Probability_To_Churn <= 0.15 ~ "3. <= 0.15"
+                                                   , Probability_To_Churn <= 0.2 ~ "4. <= 0.2"
+                                                   , Probability_To_Churn <= 0.25 ~ "5. <= 0.25"
+                                                   , Probability_To_Churn <= 0.3 ~ "6. <= 0.3"
+                                                   , Probability_To_Churn <= 0.35 ~ "7. <= 0.35"
+                                                   , Probability_To_Churn <= 0.4 ~ "8. <= 0.4"
+                                                   , Probability_To_Churn <= 0.45 ~ "9. <= 0.45"
+                                                   , Probability_To_Churn <= 0.5 ~ "10. <= 0.5"
+                                                   , Probability_To_Churn <= 0.55 ~ "11. <= 0.55"
+                                                   , Probability_To_Churn <= 0.6 ~ "12. <= 0.6"
+                                                   , Probability_To_Churn <= 0.65 ~ "13. <= 0.65"
+                                                   , Probability_To_Churn <= 0.7 ~ "14. <= 0.7"
+                                                   , Probability_To_Churn <= 0.75 ~ "15. <= 0.75"
+                                                   , Probability_To_Churn <= 0.8 ~ "16. <= 0.8"
+                                                   , Probability_To_Churn <= 0.85 ~ "17. <= 0.85"
+                                                   , Probability_To_Churn <= 0.9 ~ "18. <= 0.9"
+                                                   , Probability_To_Churn <= 0.95 ~ "19. <= 0.95"
+                                                   , TRUE ~ "20. > 0.95"
+         )
+  )
+
+
+# Export to excel 
+writexl::write_xlsx(WC_BG_Sample_For_Churn_Snapshot_Predicted,paste("./Output Data/010_Churn_Complete_Dataset_", Date, ".xlsx"))
+
+# Define sample of WC BG Clietns with High Probability to churn
+WC_BG_High_Probability_To_Churn = WC_BG_Sample_For_Churn_Snapshot_Predicted %>%
+  filter(Product %in% c("РРђРњ","Visa Р‘СЏР»Р° РєР°СЂС‚Р°","Visa Free ATM World","Р‘СЏР»Р° РљР°СЂС‚Р°","Р‘СЏР»Р° РљР°СЂС‚Р° вЂ“ СЃР°РјРѕ Р»РёС…РІР°")
+         & Status == "Active"
+         & is.na(Penalty_Flag)
+         & Probability_To_Churn_Binned %in% c("20. > 0.95"
+                                              ,"19. <= 0.95"
+                                              ,"18. <= 0.9"
+                                              #,"17. <= 0.85"
+                                              #,"16. <= 0.8"
+                                              #,"15. <= 0.75"
+                                              )
+         ) 
+
+writexl::write_xlsx(WC_BG_High_Probability_To_Churn,paste("./Final Results and Documentation/WC_BG_Highest_Probability_To_Churn", Date, ".xlsx"))
+
+
+# Churn_test <- readRDS('\\\\10.254.1.4\\Files\\Analysis\\1.Projects\\110.WCard BG\\7.Strategic Analysis\\13 Cross Sale\\Output Data\\020_WC_BG_Sample_For_Churn_Snapshot_202010_Predicted.rds') %>% 
+#   rename(BadFlag = BadFlag_202009,
+#          Last_Withdrawn_Amount_Before = Last_Withdrawn_Amount_Before_202010)
+# 
+# 
+# not_in_old_data <- WC_BG_Sample_For_Churn_Snapshot_Predicted %>% filter(!OfferSK %in% Churn_test$OfferSK)
+# 
+# all_equal(Churn_test, zzz)
+# 
+# all(Churn_test$OfferSK %in% zzz$OfferSK)
