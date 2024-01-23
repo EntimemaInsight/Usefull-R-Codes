@@ -1,0 +1,131 @@
+  library(tidyverse)
+  library(readxl)
+  library(writexl)
+  library(lubridate)
+  
+  source('//hind.smartitbg.int/FileServer/Data Analyses/Analysis/9. Personal folders/Zhivko Kolev/R Projects/AutomatedReports/Functions/F_FormatPercentage.R')
+  source('//hind.smartitbg.int/FileServer/Data Analyses/Analysis/9. Personal folders/Zhivko Kolev/R Projects/AutomatedReports/Functions/F_Elapsed_Months.R')
+  
+  ### White Card ###
+  
+  MatrixData = readRDS("//hind.smartitbg.int/FileServer/Data Analyses/Analysis/1.Projects/110_1 WC All Businesses/001 Auto Reports/Output Data/WC_Provisions_Matrix_Data_No_Sold2024-01-01.rds")
+  
+  Transitions  <-        MatrixData %>%
+    group_by(EasyClientNumber) %>%
+    arrange(Exportdate) %>%
+    
+    mutate(Transition_date  = lead(Exportdate,1)
+           ,Transition = lead(DelinquencyGrps,1)
+    ) %>%
+    ungroup() %>%
+    mutate( TransitionTo   = case_when(  is.na(.$Transition_date) &  is.na(.$SoldDebt) ~  0
+                                         , is.na(.$Transition_date) & !is.na(.$SoldDebt) ~  9
+                                         ,!is.na(.$Transition) ~ .$Transition
+                                         ,  TRUE ~ 99))
+  
+  DefaultFrequency <- Transitions %>% 
+    filter(DelinquencyGrps %in% c(1,2)) %>%
+    mutate(DefaultAfterDays = ifelse(elapsed_months(FirstDefaultDate, Exportdate) >= 0, elapsed_months(FirstDefaultDate, Exportdate) + 1, NA),
+           Default_12 = ifelse(!is.na(DefaultAfterDays) & DefaultAfterDays <= 12, 1, 0 )
+    ) %>%
+    group_by(Exportdate, DelinquencyGrps) %>% 
+    summarise(Accounts = n(),
+              DefaultAfter_360DPD = sum(Default_12)) %>%
+    ungroup() 
+  
+  DefaultRate = DefaultFrequency %>% 
+    mutate(DefaultRate = DefaultAfter_360DPD / Accounts) %>%
+    group_by(DelinquencyGrps) %>% 
+    arrange(desc(Exportdate)) %>% 
+    mutate(rw_ix = row_number()) %>% 
+    filter(rw_ix >= 13, rw_ix <=15) %>% 
+    summarise(DefaultRate = mean(DefaultRate)) %>%
+    ungroup()
+  
+  DefaultFrequency_Higher <- Transitions %>% 
+    filter(DelinquencyGrps %in% c(1,2) & TotalDue > 0) %>%
+    mutate(DefaultAfterDays = ifelse(elapsed_months(FirstDefaultDate, Exportdate) >= 0, elapsed_months(FirstDefaultDate, Exportdate) + 1, NA),
+           Default_12 = ifelse(!is.na(DefaultAfterDays) & DefaultAfterDays <= 12, 1, 0 )
+    ) %>%
+    group_by(Exportdate, DelinquencyGrps) %>% 
+    summarise(Accounts = n(),
+              DefaultAfter_360DPD = sum(Default_12)) %>%
+    ungroup() 
+  
+  DefaultRate_Higher = DefaultFrequency_Higher %>% 
+    mutate(DefaultRate = DefaultAfter_360DPD / Accounts) %>%
+    group_by(DelinquencyGrps) %>% 
+    arrange(desc(Exportdate)) %>% 
+    mutate(rw_ix = row_number()) %>% 
+    filter(rw_ix >= 13, rw_ix <=15) %>% 
+    summarise(DefaultRate = mean(DefaultRate)) %>%
+    ungroup()
+  
+  ### A1 Card ###
+  MatrixDataA1 = readRDS("//hind.smartitbg.int/FileServer/Data Analyses/Analysis/1.Projects/110_1 WC All Businesses/001 Auto Reports/Output Data/A1_Provisions_Matrix_Data_No_Sold2024-01-01.rds")
+  
+  TransitionsA1  <-       MatrixDataA1 %>%
+    group_by(EasyClientNumber) %>%
+    arrange(Exportdate) %>%
+    
+    mutate(Transition_date  = lead(Exportdate,1)
+           ,Transition = lead(DelinquencyGrps,1)
+    ) %>%
+    ungroup() %>%
+    mutate( TransitionTo   = case_when(  is.na(.$Transition_date) &  is.na(.$SoldDebt) ~  0
+                                         , is.na(.$Transition_date) & !is.na(.$SoldDebt) ~  9
+                                         ,!is.na(.$Transition) ~ .$Transition
+                                         ,  TRUE ~ 99))
+  
+  
+  DefaultFrequencyA1 <- TransitionsA1 %>% 
+    filter(DelinquencyGrps %in% c(1,2)) %>%
+    mutate(DefaultAfterDays = ifelse(elapsed_months(FirstDefaultDate, Exportdate) >= 0, elapsed_months(FirstDefaultDate, Exportdate) + 1, NA),
+           Default_12 = ifelse(!is.na(DefaultAfterDays) & DefaultAfterDays <= 12, 1, 0 )
+    ) %>%
+    group_by(Exportdate, DelinquencyGrps) %>% 
+    summarise(Accounts = n(),
+              DefaultAfter_360DPD = sum(Default_12)) %>%
+    ungroup() 
+  
+  
+  DefaultRateA1 = DefaultFrequencyA1 %>% 
+    mutate(DefaultRate = DefaultAfter_360DPD / Accounts) %>%
+    group_by(DelinquencyGrps) %>% 
+    arrange(desc(Exportdate)) %>% 
+    mutate(rw_ix = row_number()) %>% 
+    filter(rw_ix >= 13, rw_ix <=15) %>% 
+    summarise(DefaultRate = mean(DefaultRate)) %>%
+    ungroup()
+  
+  DefaultFrequencyA1_Higher <- TransitionsA1 %>% 
+    filter(DelinquencyGrps %in% c(1,2) & TotalDue > 0) %>%
+    mutate(DefaultAfterDays = ifelse(elapsed_months(FirstDefaultDate, Exportdate) >= 0, elapsed_months(FirstDefaultDate, Exportdate) + 1, NA),
+           Default_12 = ifelse(!is.na(DefaultAfterDays) & DefaultAfterDays <= 12, 1, 0 )
+    ) %>%
+    group_by(Exportdate, DelinquencyGrps) %>% 
+    summarise(Accounts = n(),
+              DefaultAfter_360DPD = sum(Default_12)) %>%
+    ungroup() 
+  
+  DefaultRateA1_Higher = DefaultFrequencyA1_Higher %>% 
+    mutate(DefaultRate = DefaultAfter_360DPD / Accounts) %>%
+    group_by(DelinquencyGrps) %>% 
+    arrange(desc(Exportdate)) %>% 
+    mutate(rw_ix = row_number()) %>% 
+    filter(rw_ix >= 13, rw_ix <=15) %>% 
+    summarise(DefaultRate = mean(DefaultRate)) %>%
+    ungroup()
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
