@@ -1,0 +1,235 @@
+# Aim  - Create Sample for psycho score e-mail campaign for WC BG Clients
+
+# Load libraries
+require(plyr)
+require(dplyr)
+require(readr)
+require(tidyr)
+require(lubridate)
+require(expm)
+require(reshape2)
+require(ggplot2)
+require(funModeling)
+require(reshape)
+require(data.table)
+require(readxl)
+library(scales)
+library(odbc)
+library(DBI)
+library(writexl)
+
+# Load User Defined Functions
+source("./Functions/readExport01.R")
+
+# Load Full Export 01 up till 2017.01
+Export01_Until_201701 = read_delim("./Input Data/export-01.csv", delim = ";", na = c("NULL",NA,""," "))%>%
+  mutate(cardid = as.character(cardid)
+         , easyclientnumber = as.character(easyclientnumber))
+
+# Read Export 01 Files - all from the beginning of history 
+# Set date parameter and read automatically all Export 01 files from flat files
+DateUntill =  floor_date(Sys.Date(), 'month')
+DateBegin = as.Date("2017-02-01")
+
+periodForAnalysis = length(seq(from=DateBegin, to=DateUntill, by='month')) 
+
+DatesList = seq.Date(from = DateUntill, length.out = periodForAnalysis, by = '-1 month')
+
+DirectoriesDF <- data.frame(DirPath = list.dirs('//10.254.1.4\\Files\\Analysis\\3.Data', recursive = FALSE)
+                            ,stringsAsFactors =  FALSE) %>% 
+  mutate(ReportDate = as.Date(paste(gsub(".*./" ,"",DirPath), '01', sep = '.'), format = '%Y.%m.%d')) %>% 
+  arrange(desc(ReportDate)) %>%
+  filter(!is.na(ReportDate)
+         ,ReportDate %in% DatesList
+  ) 
+
+
+DirectoriesFilesList = do.call(c,lapply(file.path(as.list(DirectoriesDF$DirPath),'White Card'), list.files, full.names = TRUE))
+
+Export_01_Location = DirectoriesFilesList[grepl("export-01",DirectoriesFilesList)]
+
+Exports01 <- lapply(Export_01_Location,readExport01)
+
+#Merge all Export 01 progresses
+Exports01Combined <- do.call(bind_rows, Exports01)
+
+# Combine all exports 01 - Full history 
+Exports01Combined_Full_History = Export01_Until_201701 %>%
+  bind_rows(Exports01Combined) %>%
+  filter(!is.na(easyclientnumber)) %>%
+  distinct(easyclientnumber, .keep_all = T)
+
+
+# Extract data from database 
+# Create and name a connection to the database
+myc <- DBI::dbConnect(odbc::odbc()
+                      , driver = "SQL Server"
+                      , server = "hidalgo.smartitbg.int"
+                      , database = "BIsmartWCBG"
+)
+
+# Create a query to get the needed info about active, bad and churned clients from the database
+WC_BG_Sample_For_Psycho_Query = paste0("-- Activation Dates
+with WC_PL_ECN_OfferSK_ActivationDate as
+(
+select OfferSK
+       , EasyClientNumber
+       , ActivationDate
+	   , format(ActivationDate, 'yyyy-MM-01') as ActivationMonth
+from
+   (
+SELECT OfferSK,
+       min(EasyClientNumber) AS EasyClientNumber,
+       min(ActivationDate) AS ActivationDate
+FROM dwh.DimCards
+WHERE ActivationDate IS NOT NULL
+and ActivationDate <= '2019-12-16'
+GROUP BY OfferSK
+	) MT
+),
+
+-- Product 
+WC_BG_Product as
+(
+select OfferSK
+       , Name
+from dwh.DimOffers DO
+left join dwh.DimProduct DP on DO.ProductSK = DP.ProductSK
+),
+
+-- Last Day in Portfolio
+WC_BG_Last_Day_In_PF as 
+(
+select OfferSK 
+      , max(CDate) as Last_Date_In_Portfolio
+from
+(select OfferSK
+       , CDate
+from dwh.FactCardProgress2013
+union all 
+select OfferSK
+       , CDate
+from dwh.FactCardProgress2014
+union all 
+select OfferSK
+       , CDate
+from dwh.FactCardProgress2015
+union all 
+select OfferSK
+       , CDate
+from dwh.FactCardProgress2016
+union all 
+select OfferSK
+       , CDate
+from dwh.FactCardProgress2017
+union all 
+select OfferSK
+       , CDate
+from dwh.FactCardProgress2018
+union all 
+select OfferSK
+       , CDate
+from dwh.FactCardProgressCurrent) t
+where CDate <= '2019-12-16'
+group by OfferSK
+),
+
+-- WC BG Withdrawals
+WC_BG_Withdrawals as
+(
+select OfferSK
+       , sum(Amount)*(-1) as Total_Withdrawals
+from dwh.FactFinanceOperations
+where FinOperationSK = 2
+and DocumentDate <= '2019-12-16'
+group by OfferSK
+),
+
+-- WC BG - First Penalty Interest Date
+WC_BG_First_Penalty_Interest as
+(
+select OfferSK
+       , min(DocumentDate) as FirstPenaltyInterest
+from dwh.FactExtraExpenses
+where FinOperationSK = 6
+and DocumentDate <= '2019-12-16'
+group by OfferSK
+),
+
+-- WC BG sample for psycho score from dwh
+WC_BG_Sample_For_Psycho_From_dwh as
+(
+select a.*
+      , p.Name
+	  , l.Last_Date_In_Portfolio
+	  , w.Total_Withdrawals
+	  , pe.FirstPenaltyInterest
+	  , datediff(month,ActivationMonth, cast('2019-12-01' as Date)) as MOB
+	  , case	
+	     when FirstPenaltyInterest is not null 
+		    then 'Bad'
+		else 'Good'
+		end as Good_Bad_Flag
+from WC_PL_ECN_OfferSK_ActivationDate a
+left join WC_BG_Product p on a.OfferSK = p.OfferSK
+left join WC_BG_Last_Day_In_PF l on a.OfferSK = l.OfferSK
+left join WC_BG_Withdrawals w on a.OfferSK = w.OfferSK
+left join WC_BG_First_Penalty_Interest pe on a.OfferSK = pe.OfferSK
+)
+
+select *
+from WC_BG_Sample_For_Psycho_From_dwh
+where Name in ('Visa Р‘СЏР»Р° РєР°СЂС‚Р°','A1') -- only these products are included
+and Total_Withdrawals is not null -- only active clients
+and Total_Withdrawals >= 200 -- only active over 200 cumulative withdrawals BGN
+and Last_Date_In_Portfolio = '2019-12-16' -- only clients still in portfolio are included
+")
+
+WC_BG_Sample_For_Psycho = DBI::dbFetch(DBI::dbSendQuery(myc, WC_BG_Sample_For_Psycho_Query)) 
+
+#Close the database connection
+DBI::dbDisconnect(myc)
+
+
+# Import employees KIDs
+WC_BG_Employees_KIDs = read_xlsx("./Input Data/employees.xlsx", sheet = 1) %>%
+  select(1) %>%
+  plyr::rename(c("РљРР”" = "easyclientnumber")) %>%
+  mutate(easyclientnumber = as.character(easyclientnumber)
+         , Employee_Flag = 1)
+
+
+# Create final sample for analysis 
+WC_BG_Sample_For_Psycho_Full_Final = Exports01Combined_Full_History %>%
+  left_join(WC_BG_Sample_For_Psycho %>%
+              mutate(EasyClientNumber = as.character(EasyClientNumber)), by = c("easyclientnumber" = "EasyClientNumber")) %>%
+  left_join(WC_BG_Employees_KIDs, by = c("easyclientnumber" = "easyclientnumber")) %>%
+  filter(!is.na(OfferSK) & is.na(Employee_Flag) & !is.na(email)) %>%
+  mutate(Str_Index = gregexpr("@",email)
+         , email_at = substring(email,as.numeric(Str_Index)+1,length(email))) %>%
+  select(-Str_Index)%>%
+  filter(email_at %in% c("abv.bg","gmail.com","yahoo.com"))
+
+
+# Save data to excel 
+write_xlsx(WC_BG_Sample_For_Psycho_Full_Final,"./Output Data/010_WC_BG_Sample_For_Psycho_Full_Final.xlsx")
+write_xlsx(WC_BG_Sample_For_Psycho_Full_Final,"./Final Results and Documentation/010_WC_BG_Sample_For_Psycho_Full_Final.xlsx")
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
