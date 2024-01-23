@@ -1,0 +1,70 @@
+rm(list = ls())
+options(scipen = 999)
+##### Start Block: Load Libraries #####
+
+if(!require(lubridate)){
+  install.packages("lubridate")
+  library(lubridate)
+}
+
+if(!require(tidyverse)){
+  install.packages("tidyverse")
+  library(tidyverse)
+}
+
+##### End Block: Load Libraries #####
+
+elapsed_months <- function(end_date, start_date) {
+  ed <- as.POSIXlt(end_date)
+  sd <- as.POSIXlt(start_date)
+  12 * (ed$year - sd$year) + (ed$mon - sd$mon)
+}
+##### Start Block: Load Input Parameters #####
+number_of_cores <- 12
+
+input_data_IDEA_Banking <- read.csv2(".//Input Data//IBRO_Credit_data_base_December 2019_FINAL_2.csv", 
+                             stringsAsFactors = F, header = T, na.strings = c("N/A", "NULL", "", "-"))
+input_data_IDEA_Leasing <- read.csv2(".//Input Data//Model tabel_pentru audit ILRO 31-12-2019.csv", 
+                             stringsAsFactors = F, header = T, na.strings = c("N/A", "NULL", "")) %>%
+  mutate(Pool = "LEAS")
+
+unique(input_data_IDEA_Banking$assigned_pool_code)
+
+
+Payments <- read.csv("./ContrPayments311219_002.csv", 
+                     stringsAsFactors = F, header = F, na.strings = c("N/A", "NULL", "")) %>%
+  mutate(V2 = ymd(V2)) %>%
+  arrange(V1,V2)
+
+
+
+Exposures_with_repayment_schedules <- unique(Payments$V1)
+
+CLP1.PD <- read.csv2("./CLP1_PD.csv", stringsAsFactors = F, header = T) %>%
+  mutate(Pool = "CLP1",
+         R1 = as.numeric(R1),
+         R2 = as.numeric(R2),
+         R3 = as.numeric(R3),
+         R4 = as.numeric(R4),
+         R5 = as.numeric(R5),
+         R6 = as.numeric(R6))
+
+CLP2.PD <- read.csv2("./CLP2_PD.csv", stringsAsFactors = F, header = T) %>%
+  mutate(Pool = "CLP2",
+         R1 = as.numeric(R1),
+         R2 = as.numeric(R2),
+         R3 = as.numeric(R3),
+         R4 = as.numeric(R4),
+         R5 = as.numeric(R5),
+         R6 = as.numeric(R6))
+
+LEAS.PD <- read.csv2("./LEAS_PD.csv", stringsAsFactors = F, header = T) %>%
+  mutate(Pool = "LEAS",
+         R1 = as.numeric(R1),
+         R2 = as.numeric(R2),
+         R3 = as.numeric(R3),
+         R4 = as.numeric(R4),
+         R5 = as.numeric(R5),
+         R6 = as.numeric(R6))
+
+PD.Curves <- bind_rows(CLP1.PD, CLP2.PD, LEAS.PD)
