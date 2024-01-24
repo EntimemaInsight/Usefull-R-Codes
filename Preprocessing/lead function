@@ -1,0 +1,36 @@
+library(tidyverse)
+
+data <- data.frame(
+  ID = c(1, 2, 3, 4, 5),
+  Exportdate = c("2022-01-01", "2022-02-01", "2022-03-01", "2022-04-01", "2022-05-01"),
+  DelinquencyGrps = c("A", "B", "C", "D", "E")
+)
+
+
+data
+
+# Execution before lead
+ ID Exportdate DelinquencyGrps
+1  1 2022-01-01               A
+2  2 2022-02-01               B
+3  3 2022-03-01               C
+4  4 2022-04-01               D
+5  5 2022-05-01               E
+
+
+# Execution after lead
+
+data <- data %>%
+  arrange(ID) %>%
+  mutate(
+    Transition_date = lead(Exportdate, 1),
+    Transition = lead(DelinquencyGrps, 1)
+  )
+
+ID Exportdate DelinquencyGrps Transition_date Transition
+1  1 2022-01-01               A      2022-02-01          B
+2  2 2022-02-01               B      2022-03-01          C
+3  3 2022-03-01               C      2022-04-01          D
+4  4 2022-04-01               D      2022-05-01          E
+5  5 2022-05-01               E            <NA>       <NA>
+> 
