@@ -33,7 +33,7 @@
               DefaultAfter_360DPD = sum(Default_12)) %>%
     ungroup() 
   
-  DefaultRate = DefaultFrequency %>% 
+  DefaultRate <- DefaultFrequency %>% 
     mutate(DefaultRate = DefaultAfter_360DPD / Accounts) %>%
     group_by(DelinquencyGrps) %>% 
     arrange(desc(Exportdate)) %>% 
