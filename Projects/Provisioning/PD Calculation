@@ -9,20 +9,30 @@
   ### White Card ###
   
   MatrixData = readRDS("//hind.smartitbg.int/FileServer/Data Analyses/Analysis/1.Projects/110_1 WC All Businesses/001 Auto Reports/Output Data/WC_Provisions_Matrix_Data_No_Sold2024-01-01.rds")
-  
+
+### *** Преобразуване на данните, за да се идентифицират и документират преходите (Transitions) на клиентите между различни стадии на забавени плащания (DelinquencyGrps) 
+Идеята е да се създаде структура, която да отразява как клиентите се преместват между различните стадии на забава на плащане (или други състояния като продажба на дълга), 
+което е основополагащ момент в моделирането на вероятността за дефолт *** ###
+
+
   Transitions  <-        MatrixData %>%
-    group_by(EasyClientNumber) %>%
-    arrange(Exportdate) %>%
+    group_by(EasyClientNumber) %>% # Групиране по EasyClientNumber. Всяко уникално EasyClientNumber представлява отделен клиент
+    arrange(Exportdate) %>% # Подреждане на данните по дата на експорт, за да се следи хронологичният ред на събитията за всеки клиент.
     
-    mutate(Transition_date  = lead(Exportdate,1)
-           ,Transition = lead(DelinquencyGrps,1)
+    mutate(Transition_date  = lead(Exportdate,1) # Transition_date представлява датата на следващия запис за същия клиент
+           ,Transition = lead(DelinquencyGrps,1) # Transition показва следващата група на забавени плащания (DelinquencyGrps)
     ) %>%
     ungroup() %>%
     mutate( TransitionTo   = case_when(  is.na(.$Transition_date) &  is.na(.$SoldDebt) ~  0
                                          , is.na(.$Transition_date) & !is.na(.$SoldDebt) ~  9
                                          ,!is.na(.$Transition) ~ .$Transition
                                          ,  TRUE ~ 99))
+
+
   
+   ### *** DefaultFrequency: Този показател се изчислява като филтрира клиентите с определени нива на забавяне на плащанията (DelinquencyGrps 1 и 2)
+и изчислява броя на клиентите, които са влезли в дефолт в рамките на 12 месеца след първоначалния им дефолт *** ###
+
   DefaultFrequency <- Transitions %>% 
     filter(DelinquencyGrps %in% c(1,2)) %>%
     mutate(DefaultAfterDays = ifelse(elapsed_months(FirstDefaultDate, Exportdate) >= 0, elapsed_months(FirstDefaultDate, Exportdate) + 1, NA),
@@ -32,7 +42,10 @@
     summarise(Accounts = n(),
               DefaultAfter_360DPD = sum(Default_12)) %>%
     ungroup() 
-  
+
+
+ ### *** DefaultRate: Тази ставка се изчислява като средно аритметично на DefaultFrequency за последните 3 месеца (13 до 15 месеца назад) *** ###
+
   DefaultRate <- DefaultFrequency %>% 
     mutate(DefaultRate = DefaultAfter_360DPD / Accounts) %>%
     group_by(DelinquencyGrps) %>% 
@@ -41,7 +54,10 @@
     filter(rw_ix >= 13, rw_ix <=15) %>% 
     summarise(DefaultRate = mean(DefaultRate)) %>%
     ungroup()
-  
+
+
+ ### *** DefaultFrequency_Higher: Подобно на DefaultFrequency, но с допълнително условие за TotalDue > 0, което вероятно означава, че се взимат предвид само клиентите с някаква задължение *** ###
+
   DefaultFrequency_Higher <- Transitions %>% 
     filter(DelinquencyGrps %in% c(1,2) & TotalDue > 0) %>%
     mutate(DefaultAfterDays = ifelse(elapsed_months(FirstDefaultDate, Exportdate) >= 0, elapsed_months(FirstDefaultDate, Exportdate) + 1, NA),
@@ -51,7 +67,10 @@
     summarise(Accounts = n(),
               DefaultAfter_360DPD = sum(Default_12)) %>%
     ungroup() 
-  
+
+ ### *** DefaultRate_Higher: Същата логика като за DefaultRate, но използва данните от DefaultFrequency_Higher *** ###
+
+
   DefaultRate_Higher = DefaultFrequency_Higher %>% 
     mutate(DefaultRate = DefaultAfter_360DPD / Accounts) %>%
     group_by(DelinquencyGrps) %>% 
