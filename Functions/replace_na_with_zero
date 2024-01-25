@@ -1,0 +1,4 @@
+replace_na_with_zero <- function(data) {
+  data[is.na(data)] <- 0
+  return(data)
+}
