@@ -43,6 +43,21 @@
               DefaultAfter_360DPD = sum(Default_12)) %>%
     ungroup() 
 
+# Plot
+ggplot(DefaultFrequency, aes(x = Exportdate, y = DefaultAfter_360DPD, group = DelinquencyGrps, color = as.factor(DelinquencyGrps))) +
+  geom_line() + 
+  geom_point() + 
+  labs(title = "Default Frequency Over Time",
+       x = "Export Date",
+       y = "Number of Defaults After 360 DPD",
+       color = "Delinquency Group") +
+  theme_minimal() + 
+  scale_color_manual(values = c("blue", "red")) 
+ggsave("default_frequency_plot.png", width = 10, height = 6)
+
+
+
+
 
  ### *** DefaultRate: Тази ставка се изчислява като средно аритметично на DefaultFrequency за последните 3 месеца (13 до 15 месеца назад) *** ###
 
