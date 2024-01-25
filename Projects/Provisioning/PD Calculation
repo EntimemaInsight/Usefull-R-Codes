@@ -80,7 +80,8 @@
     summarise(DefaultRate = mean(DefaultRate)) %>%
     ungroup()
   
-  ### A1 Card ###
+  ### A1 Card  --------->>>> логиката е аналогична на горната част на скрипта ###
+
   MatrixDataA1 = readRDS("//hind.smartitbg.int/FileServer/Data Analyses/Analysis/1.Projects/110_1 WC All Businesses/001 Auto Reports/Output Data/A1_Provisions_Matrix_Data_No_Sold2024-01-01.rds")
   
   TransitionsA1  <-       MatrixDataA1 %>%
