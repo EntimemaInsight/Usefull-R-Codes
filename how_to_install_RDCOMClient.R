@@ -1,0 +1,1 @@
+install.packages("http://www.omegahat.net/R/bin/windows/contrib/4.0/RDCOMClient_0.94-0.zip", repos = NULL, type = "binary")
